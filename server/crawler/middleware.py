@@ -9,6 +9,7 @@
 
 import time
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,12 @@ def rate_limit(interval: float = 2.0):
         def wrapper(*args, **kwargs):
             now = time.time()
             gap = now - last[0]
-            if gap < interval:
-                time.sleep(interval - gap)
+            min_sleep = interval * 0.8
+            max_sleep = interval * 1.2
+            rand_sleep = random.uniform(min_sleep, max_sleep)
+
+            if gap < rand_sleep:
+                time.sleep(rand_sleep - gap)
             last[0] = time.time()
             return func(*args, **kwargs)
         return wrapper
@@ -40,8 +45,12 @@ def retry(max_times: int = 3, delay: float = 1.0):
                 except Exception as e:
                     last_exc = e
                     wait = delay * (2 ** (attempt - 1))
-                    logger.warning(f"第 {attempt} 次失败: {e}，{wait:.1f}s 后重试")
-                    time.sleep(wait)
+                    # 波动范围：基础值 ±20%
+                    min_wait = wait * 0.8
+                    max_wait = wait * 1.2
+                    rand_wait = random.uniform(min_wait, max_wait)
+                    logger.warning(f"第 {attempt} 次失败: {e}，{rand_wait:.1f}s 后重试")
+                    time.sleep(rand_wait)
             raise last_exc
         return wrapper
     return decorator

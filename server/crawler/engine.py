@@ -49,7 +49,6 @@ class Engine:
         Returns:
             清洗后的 DataPoint 列表
         """
-        from .pipelines import save_json, save_csv
 
         logger.info(f"[引擎] 启动: {source.name}")
 
@@ -61,6 +60,8 @@ class Engine:
 
         # 3. 存储
         if save:
+            from .pipelines import save_json, save_csv
+
             save_dir = Path(save_dir or (Path(__file__).parent.parent / "cache"))
             save_dir.mkdir(parents=True, exist_ok=True)
 
