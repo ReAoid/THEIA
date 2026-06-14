@@ -1,0 +1,11 @@
+cache/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+/refer/
