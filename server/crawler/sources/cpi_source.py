@@ -1,36 +1,41 @@
 """
 数据源：CPI 专项（居民消费价格指数）
 
-基于 StatsAPISource 的通用能力，封装 CPI 特有的指标注册表、
+基于国家统计局新版 esData API，封装 CPI 特有的指标注册表、
 分组查询、同比/环比计算等逻辑。
+
+新版 API（2024+）：
+    POST https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData
+    请求体：JSON { cid, daCatalogId, das, dts, indicatorIds, rootId, showType }
+    响应体：{ "data": [...], "success": true, "state": 20000, "message": "成功" }
 
 用法：
     # 配合 Engine 使用
     engine = Engine()
-    data = engine.run(CPISource(zbcode="A010101", period="2022"), save=True)
+    data = engine.run(CPISource(period="202605"), save=True)
 
-    # 直接使用
-    source = CPISource(zbcode="A010101", period="202201")
+    # 指定特定指标（默认查全部 13 个 CPI 分类）
+    source = CPISource(indicator_ids=["53180dfb9c14411ba4b762307c85920c"], period="202601")
     points = source.flow()
 """
 
 import json
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import requests
 
 from crawler.base import DataSource, DataPoint
-from crawler.middleware import rate_limit, retry, log_request
+from crawler.middleware import rate_limit, log_request
 
 logger = logging.getLogger(__name__)
 
-# ── API 基础配置（与 stats_api.py 一致）─────────────────
+# ── API 基础配置 ─────────────────────────────────────
 
-BASE_URL = "https://data.stats.gov.cn/easyquery.htm"
+BASE_URL = "https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -39,61 +44,67 @@ HEADERS = {
     ),
     "Referer": "https://data.stats.gov.cn/easyquery.htm?cn=A01",
     "X-Requested-With": "XMLHttpRequest",
-    "Content-Type": "application/x-www-form-urlencoded",
+    "Content-Type": "application/json",
 }
 
-# ── CPI 指标注册表 ────────────────────────────────────────
-#
-# 代码来源：refer/cnstats-main/README.md + refer/national_data_spider/getcode.py
-# 分组说明：
-#   上年同月=100 — 最常用，反映月度同比价格变动
-#   上年同期=100 — 反映累计同比价格变动
-#   上月=100     — 反映月度环比价格变动
+# ── esData API 固定参数（CPI 专项页面）────────────────
 
-CPI_INDICATORS = {
-    # ── 上年同月=100 ──────────────────────────────
-    "A010101": "全国居民消费价格指数(上年同月=100)",
-    "A01010101": "全国居民消费价格指数(上年同月=100)(2016-)",
-    "A01010102": "全国居民消费价格指数(上年同月=100)(-2015)",
-    "A010102": "全国食品类居民消费价格指数(上年同月=100)",
-    "A010103": "城市居民消费价格指数(上年同月=100)",
-    "A01010301": "城市居民消费价格指数(上年同月=100)(2016-)",
-    "A01010302": "城市居民消费价格指数(上年同月=100)(-2015)",
-    "A010104": "城市食品类居民消费价格指数(上年同月=100)",
-    "A010105": "农村居民消费价格指数(上年同月=100)",
-    "A01010501": "农村居民消费价格指数(上年同月=100)(2016-)",
-    "A01010502": "农村居民消费价格指数(上年同月=100)(-2015)",
-    "A010106": "农村食品类居民消费价格指数(上年同月=100)",
-    # ── 上年同期=100 ──────────────────────────────
-    "A010201": "全国居民消费价格指数(上年同期=100)(2016-)",
-    "A010202": "全国居民消费价格指数(上年同期=100)(-2015)",
-    "A010203": "全国食品类居民消费价格指数(上年同期=100)",
-    "A010204": "城市居民消费价格指数(上年同期=100)(2016-)",
-    "A010205": "城市居民消费价格指数(上年同期=100)(-2015)",
-    "A010206": "城市食品类居民消费价格指数(上年同期=100)",
-    "A010207": "农村居民消费价格指数(上年同期=100)(2016-)",
-    "A010208": "农村居民消费价格指数(上年同期=100)(-2015)",
-    "A010209": "农村食品类居民消费价格指数(上年同期=100)",
-    # ── 上月=100 ────────────────────────────────
-    "A010301": "全国居民消费价格指数(上月=100)(2016-)",
-    "A010302": "全国居民消费价格指数(上月=100)(-2015)",
-    "A010303": "食品类居民消费价格指数(上月=100)",
-    "A010304": "城市居民消费价格指数(上月=100)(2016-)",
-    "A010305": "城市居民消费价格指数(上月=100)(-2015)",
-    "A010306": "城市食品类居民消费价格指数(上月=100)",
-    "A010307": "农村居民消费价格指数(上月=100)(2016-)",
-    "A010308": "农村居民消费价格指数(上月=100)(-2015)",
-    "A010309": "农村食品类居民消费价格指数(上月=100)",
-    # ── 分省 CPI (2016-) ─────────────────────────
-    "A01010B01": "居民消费价格指数(上年同月=100), 分省",
-    "A01010B02": "食品烟酒类居民消费价格指数(上年同月=100), 分省",
+CID = "5c7452825c7c4dcba391db5ca7f335c5"
+ROOT_ID = "fc982599aa684be7969d7b90b1bd0e84"
+DEFAULT_DA = [{"text": "全国", "value": "000000000000"}]
+
+# ── CPI 指标 UUID 注册表 ──────────────────────────────
+#
+# 从新版 esData API 返回结果中提取的 UUID → 中文名映射。
+# 以"上年同月=100"的 CPI 细分指标为主（共 13 个二级分类）。
+
+# ── 运行时校验缓存 ────────────────────────────────
+# 记录 parse() 时发现的 UUID ↔ 名称不匹配，避免重复警告
+_uuid_warnings_emitted: set[str] = set()
+
+
+CPI_UUID_INDICATORS = {
+    "53180dfb9c14411ba4b762307c85920c": "居民消费价格指数 (上年同月=100)",
+    "42c2d9b5d1b749c4b68c2cbd2e3d4a42": "食品烟酒及在外餐饮类居民消费价格指数(上年同月=100)",
+    "23db96d6f25c4acbb8801616fc2e509d": "衣着类居民消费价格指数 (上年同月=100)",
+    "4fb7ea343fc7403bb412cf48fb2f3f0e": "居住类居民消费价格指数 (上年同月=100)",
+    "e4a6cd580cfe43c3a92140d2edb5e7df": "生活用品及服务类居民消费价格指数 (上年同月=100)",
+    "e6e42078f30e483b899b2701a766909a": "交通通信类居民消费价格指数 (上年同月=100)",
+    "e2636c6c7549458ca90057f9b7eff442": "教育文化娱乐类居民消费价格指数 (上年同月=100)",
+    "27cc82bede504fbc896c02a412bc7671": "医疗保健类居民消费价格指数 (上年同月=100)",
+    "2cf481203dd0404c8b778d435d401c7a": "其他用品及服务类居民消费价格指数 (上年同月=100)",
+    "f91a869a255949ccba0cd73cfa871340": "非食品居民消费价格指数 (上年同月=100)",
+    "61a170ad7fa44fa4b2ff60fd708e516e": "消费品居民消费价格指数 (上年同月=100)",
+    "c87191b714554e9eba8c2c062abfabb4": "服务居民消费价格指数 (上年同月=100)",
+    "71be3d43d2fb44188199840272463ae0": "不包括食品和能源居民消费价格指数 (上年同月=100)",
 }
 
 CPI_GROUPS = {
-    "全国(上年同月)": ["A010101", "A010102", "A010103", "A010105"],
-    "全国(上年同期)": ["A010201", "A010203", "A010204", "A010207"],
-    "全国(上月)":     ["A010301", "A010303", "A010304", "A010307"],
-    "分省CPI":        ["A01010B01", "A01010B02"],
+    "全部CPI(13项)": [
+        "53180dfb9c14411ba4b762307c85920c",
+        "42c2d9b5d1b749c4b68c2cbd2e3d4a42",
+        "23db96d6f25c4acbb8801616fc2e509d",
+        "4fb7ea343fc7403bb412cf48fb2f3f0e",
+        "e4a6cd580cfe43c3a92140d2edb5e7df",
+        "e6e42078f30e483b899b2701a766909a",
+        "e2636c6c7549458ca90057f9b7eff442",
+        "27cc82bede504fbc896c02a412bc7671",
+        "2cf481203dd0404c8b778d435d401c7a",
+        "f91a869a255949ccba0cd73cfa871340",
+        "61a170ad7fa44fa4b2ff60fd708e516e",
+        "c87191b714554e9eba8c2c062abfabb4",
+        "71be3d43d2fb44188199840272463ae0",
+    ],
+    "核心CPI(8项)": [
+        "53180dfb9c14411ba4b762307c85920c",
+        "42c2d9b5d1b749c4b68c2cbd2e3d4a42",
+        "23db96d6f25c4acbb8801616fc2e509d",
+        "4fb7ea343fc7403bb412cf48fb2f3f0e",
+        "e4a6cd580cfe43c3a92140d2edb5e7df",
+        "e6e42078f30e483b899b2701a766909a",
+        "e2636c6c7549458ca90057f9b7eff442",
+        "27cc82bede504fbc896c02a412bc7671",
+    ],
 }
 
 
@@ -108,95 +119,152 @@ def _safe_float(v: str) -> float | None:
         return None
 
 
+def _normalize_name(name: str) -> str:
+    """归一化指标名称，用于比较（去空格、全角转半角、去括号内空格）。"""
+    if not name:
+        return ""
+    result = name.strip()
+    # 全角转半角
+    result = result.replace("（", "(").replace("）", ")")
+    result = result.replace("　", " ")
+    # 括号内去空格
+    result = result.replace("( ", "(").replace(" )", ")")
+    # 连续空格合并
+    while "  " in result:
+        result = result.replace("  ", " ")
+    return result.strip()
+
+
 def _normalize_date(code: str) -> str:
-    """时间代码转可读格式：202201 → 2022-01"""
-    code = code.strip()
-    if len(code) == 6 and code.isdigit():
-        return f"{code[:4]}-{code[4:]}"
+    """时间代码转可读格式：202605MM → 2026-05"""
+    code = code.strip().upper()
+    if code.endswith("MM") and len(code) == 8:
+        return f"{code[:4]}-{code[4:6]}"
     return code
 
 
+def _period_to_dts(period: str) -> list[str]:
+    """
+    将用户输入的 period 转换为 dts 数组。
+
+    输入格式：
+        "202605"        → 单月：["202605MM"]
+        "202406-202605" → 范围：["202406MM-202605MM"]
+        "2026"          → 全年：["202601MM-202612MM"]
+        "1949-"         → 全部历史（实际用最近 5 年）：["202106MM-202605MM"]
+        "202406MM"      → 已有 MM 后缀则直接使用
+
+    返回：dts 数组
+    """
+    period = period.strip()
+
+    # 已有 MM 后缀
+    if period.upper().endswith("MM"):
+        return [period.upper()]
+
+    # 范围格式：YYYY-YYYY 或 YYYYMM-YYYYMM
+    if "-" in period and period != "-":
+        parts = period.split("-", 1)
+        start = parts[0].strip()
+        end = parts[1].strip()
+
+        # YYYY 格式 → YYYY01MM
+        if len(start) == 4 and start.isdigit():
+            start = start + "01"
+        if len(end) == 4 and end.isdigit():
+            end = end + "12"
+
+        # 补 MM 后缀
+        if len(start) == 6 and start.isdigit():
+            start = start + "MM"
+        if len(end) == 6 and end.isdigit():
+            end = end + "MM"
+
+        if start.endswith("MM") and end.endswith("MM"):
+            return [f"{start}-{end}"]
+
+    # 开放范围如 "1949-"
+    if period.endswith("-") and len(period) > 1:
+        # 最近 5 年
+        now = datetime.now()
+        end_ym = f"{now.year}{now.month:02d}MM"
+        start_ym = f"{now.year - 5}{now.month:02d}MM"
+        return [f"{start_ym}-{end_ym}"]
+
+    # 单月格式：YYYYMM
+    if len(period) == 6 and period.isdigit():
+        return [period + "MM"]
+
+    # 单年格式：YYYY
+    if len(period) == 4 and period.isdigit():
+        return [period + "01MM-" + period + "12MM"]
+
+    # 兜底：返回最近 12 个月
+    now = datetime.now()
+    end_ym = f"{now.year}{now.month:02d}MM"
+    start_dt = now - timedelta(days=365)
+    start_ym = f"{start_dt.year}{start_dt.month:02d}MM"
+    return [f"{start_ym}-{end_ym}"]
+
+
 # ═══════════════════════════════════════════════════════════
-#  CPISource — CPI 数据源
+#  CPISource — CPI 数据源（新版 esData API）
 # ═══════════════════════════════════════════════════════════
 
 class CPISource(DataSource):
     """
-    CPI 数据源。
+    CPI 数据源（新版 esData API）。
 
-    专为国家统计局 CPI 指标设计的数据源，在 StatsAPISource 的基础上：
-      - 内置 CPI 指标注册表（代码 + 名称 + 分组）
-      - 支持分组查询（同时查多个 CPI 指标）
-      - 提供同比/环比分析辅助
-      - 支持分省 CPI 查询
-      - 支持双后端：requests（轻量） 或 Playwright（防 403）
+    基于国家统计局新版 esData 接口，使用 JSON POST + UUID 指标 ID 查询 CPI 数据。
 
-    数据读取方式参考：
-      - crawler/sources/stats_api.py  — 通用 API 调用 + DataPoint 封装
-      - refer/cnstats-main/common.py  — EasyQuery 请求参数构造
-      - refer/cnstats-main/stats.py   — JSON 响应解析逻辑
-      - server/crawler/playwright_crawler.py  — Playwright 浏览器内 fetch
+    主要变化（vs 旧版 EasyQuery API）：
+      - 请求体为 JSON，不再是 form-encoded
+      - 使用 UUID 指标 ID（如 "53180dfb9c14411ba4b762307c85920c"）
+      - 时间格式为 "YYYYMMMM"（如 "202605MM"）
+      - 支持一次查询多个指标
     """
 
     name = "cpi"
 
-    def __init__(self, zbcode: str, period: str = "1949-",
-                 regcode: str = None, dbcode: str = "hgyd",
-                 backend: str = "requests"):
+    def __init__(self, indicator_ids: list[str] | None = None,
+                 period: str = "202406-202605",
+                 das: list[dict] | None = None,
+                 da_catalog_id: str = ""):
         """
         Args:
-            zbcode: 指标代码（见 CPI_INDICATORS）
-            period: 时间段
-                "202201"       → 单月
-                "2022"         → 全年
-                "202201,202112" → 多个月
-                "1949-"        → 全部历史（默认）
-            regcode: 地区代码（分省查询用，如 "110000"）
-            dbcode: 数据库代码
-                hgyd = 宏观月度（默认）
-                fsyd = 分省月度（配合 regcode）
-                csyd = 城市月度（配合 regcode）
-            backend: 请求后端
-                "requests"   — 用 requests 库（轻量，需要先拿 Cookie）
-                "playwright" — 用 Playwright 浏览器（真浏览器，自动防 403）
+            indicator_ids: CPI 指标 UUID 列表。
+                默认为全部 13 个 CPI 细分指标（上年同月=100）。
+            period: 时间段。
+                "202605"        → 单月
+                "202406-202605" → 范围（默认，最近 12 个月）
+                "2026"          → 全年
+                "1949-"         → 全部历史（实际映射为最近 5 年）
+            das: 地区选择。默认为全国。
+                [{"text": "全国", "value": "000000000000"}]
+            da_catalog_id: 地区目录 ID，通常为空字符串。
         """
-        super().__init__(zbcode=zbcode, period=period,
-                         regcode=regcode, dbcode=dbcode)
-        self.zbcode = zbcode
-        self.period = period
-        self.regcode = regcode
-        self.dbcode = dbcode
-        self.backend = backend
+        if indicator_ids is None:
+            indicator_ids = list(CPI_UUID_INDICATORS.keys())
+        if das is None:
+            das = DEFAULT_DA
 
-        # requests 后端：持久化 Session（参考 cnstats-main/common.py）
+        self.indicator_ids = indicator_ids
+        self.period = period
+        self.das = das
+        self.da_catalog_id = da_catalog_id
+
         self._session = requests.Session()
-        self._session.trust_env = False
         self._session.headers.update(HEADERS)
         self._initialized = False
 
-        # playwright 后端：缓存的 browser / page 对象
-        self._playwright = None
-        self._browser = None
-        self._page = None
-
-    # ── 后端选择 ──────────────────────────────────────
+    # ── 核心流程 ──────────────────────────────────────
 
     def fetch(self) -> dict:
-        """调 EasyQuery API 拿原始 JSON。"""
-        if self.backend == "playwright":
-            return self._fetch_via_playwright()
-        return self._fetch_via_requests()
-
-    # ── 后端 A：requests（参考 cnstats-main/common.py）───
+        """调 esData API 拿原始 JSON。"""
+        self._ensure_session()
+        return self._do_request()
 
     def _ensure_session(self):
-        """
-        先访问首页拿 Cookie，避免 403。
-
-        参考：
-          refer/areacode-master/spiders.py  — Cookie 依赖
-          refer/cnstats-main/common.py      — session.trust_env = False
-        """
         if self._initialized:
             return
         logger.info("初始化 requests Session：访问统计局首页获取 Cookie")
@@ -209,222 +277,261 @@ class CPISource(DataSource):
             self._initialized = True
 
     @rate_limit(interval=2.0)
-    @retry(max_times=3, delay=1.0)
     @log_request
-    def _fetch_via_requests(self) -> dict:
-        """用 requests 发起 POST 请求。"""
-        self._ensure_session()
-
-        wds = []
-        dfwds = [
-            {"wdcode": "zb", "valuecode": self.zbcode},
-            {"wdcode": "sj", "valuecode": self.period},
-        ]
-        if self.regcode:
-            wds.append({"wdcode": "reg", "valuecode": self.regcode})
+    def _do_request(self) -> dict:
+        """用 JSON POST 发起 esData 请求。"""
+        dts = _period_to_dts(self.period)
 
         payload = {
-            "m": "QueryData",
-            "dbcode": self.dbcode,
-            "rowcode": "zb",
-            "colcode": "sj",
-            "wds": json.dumps(wds),
-            "dfwds": json.dumps(dfwds),
-            "k1": str(int(time.time() * 1000)),
+            "cid": CID,
+            "daCatalogId": self.da_catalog_id,
+            "das": self.das,
+            "dts": dts,
+            "indicatorIds": self.indicator_ids,
+            "rootId": ROOT_ID,
+            "showType": "1",
         }
 
-        resp = self._session.post(BASE_URL, data=payload,
-                                  timeout=15, verify=False)
+        logger.debug(f"esData 请求: {json.dumps(payload, ensure_ascii=False)}")
+
+        resp = self._session.post(
+            BASE_URL,
+            json=payload,
+            timeout=30,
+            verify=False,
+        )
         resp.raise_for_status()
         return resp.json()
 
-    # ── 后端 B：Playwright（参考 playwright_crawler.py）───
-
-    @log_request
-    def _fetch_via_playwright(self) -> dict:
-        """
-        用 Playwright 调 EasyQuery API。
-
-        使用 Playwright 的 APIRequestContext（浏览器内的 HTTP 客户端），
-        自动携带浏览器 Cookie，绝不会 403。
-
-        参考：
-          server/crawler/playwright_crawler.py  — StatsAPIClient.query_via_browser()
-        """
-        import asyncio
-
-        async def _run():
-            from playwright.async_api import async_playwright
-
-            async with async_playwright() as p:
-                b = await p.chromium.launch(headless=True)
-                context = await b.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                    viewport={"width": 1920, "height": 1080},
-                    locale="zh-CN",
-                )
-
-                # 先访问首页，让浏览器拿到 Cookie
-                page = await context.new_page()
-                await page.goto("https://data.stats.gov.cn",
-                                wait_until="domcontentloaded", timeout=30000)
-
-                # 用浏览器内的 HTTP 客户端发请求（自动带 Cookie）
-                api = await context.new_context()
-                # 实际上用 context.request 就行了，它已包含浏览器 Cookie
-                # 但为了独立 API 请求，用 request 的 post
-
-                wds = []
-                dfwds = [
-                    {"wdcode": "zb", "valuecode": self.zbcode},
-                    {"wdcode": "sj", "valuecode": self.period},
-                ]
-                if self.regcode:
-                    wds.append({"wdcode": "reg", "valuecode": self.regcode})
-
-                params = {
-                    "m": "QueryData",
-                    "dbcode": self.dbcode,
-                    "rowcode": "zb",
-                    "colcode": "sj",
-                    "wds": json.dumps(wds),
-                    "dfwds": json.dumps(dfwds),
-                    "k1": str(int(time.time() * 1000)),
-                }
-
-                resp = await context.request.post(
-                    BASE_URL,
-                    form=params,
-                    headers={
-                        "Referer": "https://data.stats.gov.cn/easyquery.htm?cn=A01",
-                        "X-Requested-With": "XMLHttpRequest",
-                    },
-                )
-                return await resp.json()
-
-        return asyncio.run(_run())
+    @classmethod
+    def _check_cid(cls, raw: dict):
+        """检查 API 返回的 catalogid 是否与预设 CID 一致。"""
+        data_list = raw.get("data", [])
+        if not data_list:
+            return
+        for period in data_list:
+            for val in period.get("values", []):
+                api_cid = val.get("catalogid", "")
+                if api_cid and api_cid != CID:
+                    logger.warning(
+                        f"CID 不匹配！预设: {CID}, API 返回: {api_cid}. "
+                        f"CPI 注册表可能需要更新。"
+                    )
+                    return
 
     def parse(self, raw: dict) -> list[DataPoint]:
         """
-        从 API 返回的 JSON 中解析出 DataPoint 列表。
+        从 esData API 返回的 JSON 中解析出 DataPoint 列表。
 
-        参考：
-          refer/cnstats-main/stats.py       → 维度映射 + 数据节点遍历
-          crawler/sources/stats_api.py      → _parse_response() 的实现
-          refer/national_data_spider/...    → datanodes 遍历模式
-
-        API 返回结构：
+        esData 响应结构：
         {
-          "returncode": 200,
-          "returndata": {
-            "wdnodes": [
-              {"wdcode":"zb", "nodes":[{"code":"A010101","cname":"...","unit":"%"}]},
-              {"wdcode":"sj", "nodes":[{"code":"202201","cname":"2022年1月"}]}
-            ],
-            "datanodes": [
-              {"wds":[{"wdcode":"zb","valuecode":"A010101"}, ...],
-               "data":{"strdata":"100.5","hasdata":true}}
-            ]
-          }
+          "success": true,
+          "state": 20000,
+          "message": "成功",
+          "data": [
+            {
+              "code": "202605MM",
+              "name": "2026年5月",
+              "values": [
+                {
+                  "_id": "53180dfb9c14411ba4b762307c85920c",
+                  "i_showname": "居民消费价格指数 (上年同月=100)",
+                  "value": "101.2",
+                  "du_name": "%",
+                  "da_name": "全国",
+                  "catalogid": "5c7452825c7c4dcba391db5ca7f335c5",
+                  ...
+                },
+                ...
+              ]
+            },
+            ...
+          ]
         }
         """
-        if raw.get("returncode") != 200:
-            logger.warning(f"API 异常: returncode={raw.get('returncode')}")
+        if not raw.get("success"):
+            logger.warning(f"API 异常: state={raw.get('state')}, message={raw.get('message')}")
             return []
 
-        returndata = raw.get("returndata", {})
-        wdnodes = returndata.get("wdnodes", [])
-        datanodes = returndata.get("datanodes", [])
+        # ── 运行时校验：CID 是否匹配 ────────────────
+        self._check_cid(raw)
 
-        if not wdnodes or not datanodes:
+        data_list = raw.get("data", [])
+        if not data_list:
             logger.warning("API 返回空数据")
             return []
 
-        # 1) 维度映射 code → name/unit
-        wd_map = {}
-        dim_info = {}
-        for idx, node in enumerate(wdnodes):
-            wdcode = node["wdcode"]
-            wd_map[wdcode] = idx
-            dim_info[wdcode] = {
-                n["code"]: {
-                    "name": n.get("cname", n.get("name", "")),
-                    "unit": n.get("unit", ""),
-                }
-                for n in node.get("nodes", [])
-            }
-
-        has_reg = "reg" in wd_map
-
-        # 2) 遍历数据节点
         results = []
-        for node in datanodes:
-            if not node.get("data", {}).get("hasdata"):
+        for period_entry in data_list:
+            sj_code = period_entry.get("code", "")      # "202605MM"
+            date_str = _normalize_date(sj_code)          # "2026-05"
+            period_name = period_entry.get("name", "")
+
+            values = period_entry.get("values", [])
+            if not values:
+                # 该月份无数据（可能尚未发布）
                 continue
-            strdata = node.get("data", {}).get("strdata", "")
-            if not strdata:
-                continue
 
-            val = _safe_float(strdata)
-            if val is None:
-                continue
+            for val_entry in values:
+                uuid = val_entry.get("_id", "")
+                raw_value = val_entry.get("value", "")
 
-            zb_code = node["wds"][wd_map["zb"]]["valuecode"]
-            sj_code = node["wds"][wd_map["sj"]]["valuecode"]
+                val = _safe_float(raw_value)
+                if val is None:
+                    continue
 
-            zb_name = dim_info["zb"].get(zb_code, {}).get("name",
-                      CPI_INDICATORS.get(zb_code, zb_code))
-            unit = dim_info["zb"].get(zb_code, {}).get("unit", "")
+                # ── 指标名称：优先用 API 返回的名称，同时校验注册表 ──
+                api_name = val_entry.get("i_showname", "").strip()
+                registry_name = CPI_UUID_INDICATORS.get(uuid, "")
 
-            extra = {"indicator_code": zb_code}
+                if api_name:
+                    indicator_name = api_name
+                    # 校验：注册表中的名称是否与 API 一致
+                    if (registry_name
+                            and uuid not in _uuid_warnings_emitted
+                            and _normalize_name(api_name) != _normalize_name(registry_name)):
+                        logger.warning(
+                            f"UUID {uuid} 的名称不匹配！\n"
+                            f"  注册表: {registry_name}\n"
+                            f"  API返回: {api_name}\n"
+                            f"  → 将使用 API 返回的名称，CPI_UUID_INDICATORS 可能需要更新"
+                        )
+                        _uuid_warnings_emitted.add(uuid)
+                elif registry_name:
+                    indicator_name = registry_name
+                else:
+                    # 两边都没有 → 用 UUID 本身
+                    indicator_name = uuid
+                    if uuid not in _uuid_warnings_emitted:
+                        logger.warning(f"未知 UUID: {uuid}，CPI_UUID_INDICATORS 可能需要更新")
+                        _uuid_warnings_emitted.add(uuid)
 
-            if has_reg:
-                reg_code = node["wds"][wd_map["reg"]]["valuecode"]
-                reg_name = dim_info["reg"].get(reg_code, {}).get("name", reg_code)
-                extra["region_code"] = reg_code
-            else:
-                reg_name = "全国"
-                extra["region_code"] = ""
+                unit = val_entry.get("du_name", "")
+                region = val_entry.get("da_name", "全国")
 
-            results.append(DataPoint(
-                date=_normalize_date(sj_code),
-                value=val,
-                indicator=zb_name,
-                region=reg_name,
-                unit=unit,
-                source=self.name,
-                extra=extra,
-            ))
+                results.append(DataPoint(
+                    date=date_str,
+                    value=val,
+                    indicator=indicator_name,
+                    region=region,
+                    unit=unit,
+                    source=self.name,
+                    extra={
+                        "indicator_uuid": uuid,
+                        "period_code": sj_code,
+                        "period_name": period_name,
+                    },
+                ))
 
         return results
 
-    # ── CPI 特有的辅助方法 ────────────────────────────
+    # ── 辅助方法 ──────────────────────────────────────
 
     @classmethod
     def list_indicators(cls, group: str = None) -> list[dict]:
         """
-        列出 CPI 指标。
+        列出 CPI 指标（UUID 版）。
         Args:
             group: 分组名，None 表示全部
         Returns:
-            [{"code": ..., "name": ..., "group": ...}]
+            [{"uuid": ..., "name": ..., "group": ...}]
         """
-        code_to_group = {}
-        for g, codes in CPI_GROUPS.items():
-            for c in codes:
-                code_to_group[c] = g
+        uuid_to_group = {}
+        for g, uuids in CPI_GROUPS.items():
+            for u in uuids:
+                uuid_to_group[u] = g
 
         results = []
-        for code, name in CPI_INDICATORS.items():
-            g = code_to_group.get(code, "其他")
+        for uuid, name in CPI_UUID_INDICATORS.items():
+            g = uuid_to_group.get(uuid, "其他")
             if group and g != group:
                 continue
-            results.append({"code": code, "name": name, "group": g})
+            results.append({"uuid": uuid, "name": name, "group": g})
         return results
+
+    @classmethod
+    def validate_registry(cls, period: str = "202605") -> dict:
+        """
+        全量校验注册表：拉取最新数据，检查每个 UUID 对应的名称是否匹配。
+
+        用法：
+            result = CPISource.validate_registry()
+            if result["mismatches"]:
+                print("注册表需要更新！")
+
+        Args:
+            period: 用于校验的时间段，默认最近一个月。
+
+        Returns:
+            {
+                "checked": 13,          # 检查的指标数
+                "ok": 13,               # 匹配的指标数
+                "mismatches": [],       # 不匹配的 [(uuid, 注册表名称, API名称)]
+                "unknown": [],          # 注册表中没有的 UUID
+                "cid_match": True,      # CID 是否匹配
+            }
+        """
+        source = cls(indicator_ids=list(CPI_UUID_INDICATORS.keys()),
+                     period=period)
+        raw = source.fetch()
+
+        result = {
+            "checked": 0,
+            "ok": 0,
+            "mismatches": [],
+            "unknown": [],
+            "cid_match": True,
+        }
+
+        if not raw.get("success"):
+            logger.error(f"API 返回异常: {raw.get('message')}")
+            return result
+
+        # 检查 CID
+        for period_entry in raw.get("data", []):
+            for val in period_entry.get("values", []):
+                api_cid = val.get("catalogid", "")
+                if api_cid and api_cid != CID:
+                    result["cid_match"] = False
+                    break
+
+        # 检查每个 UUID 的名称
+        seen_uuids: set[str] = set()
+        for period_entry in raw.get("data", []):
+            for val in period_entry.get("values", []):
+                uuid = val.get("_id", "")
+                if not uuid or uuid in seen_uuids:
+                    continue
+                seen_uuids.add(uuid)
+                result["checked"] += 1
+
+                api_name = val.get("i_showname", "").strip()
+                registry_name = CPI_UUID_INDICATORS.get(uuid, "")
+
+                if not registry_name:
+                    result["unknown"].append({
+                        "uuid": uuid,
+                        "api_name": api_name,
+                    })
+                    continue
+
+                if _normalize_name(api_name) == _normalize_name(registry_name):
+                    result["ok"] += 1
+                else:
+                    result["mismatches"].append({
+                        "uuid": uuid,
+                        "registry_name": registry_name,
+                        "api_name": api_name,
+                    })
+
+        if result["mismatches"]:
+            logger.warning(f"发现 {len(result['mismatches'])} 个 UUID 名称不匹配！")
+        if result["unknown"]:
+            logger.warning(f"发现 {len(result['unknown'])} 个未知 UUID！")
+        if not result["cid_match"]:
+            logger.warning(f"CID 不匹配！预设: {CID}")
+
+        return result
 
     @staticmethod
     def calc_yoy(data: list[DataPoint]) -> list[dict]:
@@ -439,17 +546,19 @@ class CPISource(DataSource):
         if not data:
             return []
 
-        sorted_data = sorted(data, key=lambda d: d.date)
+        sorted_data = sorted(data, key=lambda d: (d.indicator, d.date))
         results = []
 
-        for i, d in enumerate(sorted_data):
+        for d in sorted_data:
             entry = d.to_dict()
             entry["yoy"] = None
 
             if len(d.date) == 7:  # YYYY-MM
                 prev_date = f"{int(d.date[:4]) - 1}{d.date[4:]}"
                 for prev in sorted_data:
-                    if prev.date == prev_date and prev.value:
+                    if (prev.date == prev_date
+                            and prev.indicator == d.indicator
+                            and prev.value):
                         entry["yoy"] = round(
                             (d.value / prev.value - 1) * 100, 2
                         )
@@ -465,57 +574,66 @@ class CPISource(DataSource):
         if not data:
             return []
 
-        sorted_data = sorted(data, key=lambda d: d.date)
+        sorted_data = sorted(data, key=lambda d: (d.indicator, d.date))
         results = []
 
         for i, d in enumerate(sorted_data):
             entry = d.to_dict()
             entry["mom"] = None
-            if i > 0 and sorted_data[i - 1].value:
-                entry["mom"] = round(
-                    (d.value / sorted_data[i - 1].value - 1) * 100, 2
-                )
+            if i > 0 and sorted_data[i - 1].indicator == d.indicator:
+                prev = sorted_data[i - 1]
+                if prev.value:
+                    entry["mom"] = round(
+                        (d.value / prev.value - 1) * 100, 2
+                    )
             results.append(entry)
 
         return results
 
     @staticmethod
     def summary(data: list[DataPoint]) -> dict:
-        """生成 CPI 摘要统计。"""
+        """生成 CPI 摘要统计（按指标分组）。"""
         if not data:
             return {"count": 0}
 
-        sorted_data = sorted(data, key=lambda d: d.date)
-        values = [d.value for d in sorted_data if d.value is not None]
+        by_indicator: dict[str, list[DataPoint]] = {}
+        for d in data:
+            by_indicator.setdefault(d.indicator, []).append(d)
 
-        if not values:
-            return {"count": len(data)}
+        summaries = {}
+        for indicator, points in by_indicator.items():
+            sorted_points = sorted(points, key=lambda p: p.date)
+            values = [p.value for p in sorted_points if p.value is not None]
 
-        min_d = min(sorted_data, key=lambda d: d.value or float("inf"))
-        max_d = max(sorted_data, key=lambda d: d.value or float("-inf"))
-        latest = sorted_data[-1]
-        mean_val = sum(values) / len(values)
+            if not values:
+                summaries[indicator] = {"count": len(points), "data": []}
+                continue
 
-        result = {
-            "indicator": sorted_data[0].indicator,
-            "period": f"{sorted_data[0].date} ~ {latest.date}",
-            "count": len(sorted_data),
-            "min": {"date": min_d.date, "value": min_d.value},
-            "max": {"date": max_d.date, "value": max_d.value},
-            "mean": round(mean_val, 2),
-            "latest": {"date": latest.date, "value": latest.value},
+            min_p = min(sorted_points, key=lambda p: p.value or float("inf"))
+            max_p = max(sorted_points, key=lambda p: p.value or float("-inf"))
+            latest = sorted_points[-1]
+            mean_val = sum(values) / len(values)
+
+            s = {
+                "period": f"{sorted_points[0].date} ~ {latest.date}",
+                "count": len(sorted_points),
+                "min": {"date": min_p.date, "value": min_p.value},
+                "max": {"date": max_p.date, "value": max_p.value},
+                "mean": round(mean_val, 2),
+                "latest": {"date": latest.date, "value": latest.value},
+            }
+
+            if len(sorted_points) >= 13:
+                prev = sorted_points[-13]
+                if prev.value:
+                    s["latest_yoy"] = round(
+                        (latest.value / prev.value - 1) * 100, 2
+                    )
+
+            summaries[indicator] = s
+
+        return {
+            "count": len(data),
+            "indicators": len(by_indicator),
+            "details": summaries,
         }
-
-        if len(sorted_data) >= 13:
-            prev = sorted_data[-13]
-            if prev.value:
-                result["latest_yoy"] = round(
-                    (latest.value / prev.value - 1) * 100, 2
-                )
-
-        return result
-
-    @staticmethod
-    def describe_code(code: str) -> str:
-        """返回指标代码的中文说明。"""
-        return CPI_INDICATORS.get(code, f"未知指标代码: {code}")
