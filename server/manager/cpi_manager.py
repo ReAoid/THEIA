@@ -3,7 +3,7 @@ CPI 数据管理者
 
 职责：
   1. 封装 CPISource，提供更友好的查询接口
-  2. 缓存管理 — 先读本地缓存，没有再请求 API
+  2. 缓存管理 — 委托给 CPIStore，先读缓存，没有再请求 API
   3. 灵活筛选 — 支持按指标名称、UUID、分组名查询
 
 用法：
@@ -28,7 +28,6 @@ CPI 数据管理者
     data = mgr.get_cpi(period="2026")
 """
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -37,19 +36,15 @@ from typing import Any
 from crawler.base import DataPoint
 from crawler.sources.cpi_source import (
     CPISource,
-    CPI_UUID_INDICATORS,
     CPI_GROUPS,
-    CID,
-    ROOT_ID,
-    DEFAULT_DA,
 )
+from storage.cpi_store import CPIStore
 
 logger = logging.getLogger(__name__)
 
-# ── 缓存路径 ──────────────────────────────────────────
+# ── 默认缓存目录 ──────────────────────────────────────
 
-CACHE_DIR = Path(__file__).parent.parent / "cache"
-CPI_CACHE_FILE = CACHE_DIR / "cpi.json"
+DEFAULT_CACHE_DIR = Path(__file__).parent.parent / "cache"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -61,18 +56,27 @@ class CPIManager:
     CPI 数据管理者。
 
     在 CPISource 之上增加：
-      - 本地缓存读写
+      - 本地缓存读写（委托给 CPIStore）
       - 按名称/分组灵活筛选指标
       - 部分更新（只拉缺失的时间段）
       - 强制全量更新
     """
 
     def __init__(self, cache_dir: str | Path | None = None):
-        self.cache_dir = Path(cache_dir) if cache_dir else CACHE_DIR
+        self.cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._cache_file = self.cache_dir / "cpi.json"
+
+        # 使用 CPIStore 管理持久化
+        self._store = CPIStore(cache_dir=self.cache_dir)
         self._all_data: list[DataPoint] = []  # 当前生命周期内的全量内存缓存
         self._cache_loaded = False
+
+    # ── 向后兼容属性 ──────────────────────────────
+
+    @property
+    def _cache_file(self) -> Path:
+        """获取缓存文件路径（向后兼容）。"""
+        return self._store.cache_file
 
     # ── 公开查询接口 ──────────────────────────────────
 
@@ -157,90 +161,46 @@ class CPIManager:
         return self.get_by_group("核心CPI(8项)", period=period,
                                  force_update=force_update)
 
-    # ── 缓存管理 ──────────────────────────────────────
+    # ── 缓存管理（委托给 CPIStore）────────────────────
 
     def clear_cache(self):
-        """清空本地缓存文件。"""
+        """清空本地缓存文件和内存数据。"""
         self._all_data = []
         self._cache_loaded = False
-        if self._cache_file.exists():
-            self._cache_file.unlink()
-            logger.info(f"已清除缓存: {self._cache_file}")
+        self._store.clear()
 
     def get_cache_info(self) -> dict:
-        """查看缓存状态。"""
+        """查看缓存状态（含指标和时间范围）。"""
         self._load_cache()
-        if not self._all_data:
-            return {"cached": False, "count": 0, "date_range": None, "indicators": []}
+        info = self._store.get_cache_info()
+        # 向后兼容键
+        info["cached"] = info.get("valid", False)
+        info["cache_file"] = str(self._store.cache_file)
+        if self._all_data:
+            indicators = sorted({d.indicator for d in self._all_data})
+            info["indicators"] = indicators
+        return info
 
-        dates = sorted({d.date for d in data}) if False else sorted(
-            {d.date for d in self._all_data}
-        )
-        indicators = sorted({d.indicator for d in self._all_data})
-        return {
-            "cached": True,
-            "count": len(self._all_data),
-            "date_range": f"{dates[0]} ~ {dates[-1]}" if dates else None,
-            "indicators": indicators,
-            "cache_file": str(self._cache_file),
-        }
-
-    # ── 内部：缓存读写 ────────────────────────────────
+    # ── 内部：缓存读写（委托给 CPIStore）───────────────
 
     def _load_cache(self):
-        """从本地 JSON 文件加载缓存。"""
+        """通过 CPIStore 从本地 JSON 文件加载缓存。"""
         if self._cache_loaded:
             return
 
-        if not self._cache_file.exists():
+        self._all_data = self._store.load()
+        if self._all_data:
+            logger.info(f"从缓存加载了 {len(self._all_data)} 条 CPI 数据")
+        else:
             logger.info("本地无缓存")
-            self._cache_loaded = True
-            return
-
-        try:
-            with open(self._cache_file, "r", encoding="utf-8") as f:
-                raw = json.load(f)
-
-            self._all_data = []
-            for item in raw.get("data", []):
-                self._all_data.append(DataPoint(
-                    date=item.get("date", ""),
-                    value=item.get("value"),
-                    indicator=item.get("indicator", ""),
-                    region=item.get("region", "全国"),
-                    unit=item.get("unit", ""),
-                    source=item.get("source", "cpi"),
-                    extra={k: v for k, v in item.items()
-                           if k not in ("date", "value", "indicator",
-                                        "region", "unit", "source")},
-                ))
-
-            logger.info(f"从缓存加载了 {len(self._all_data)} 条 CPI 数据: {self._cache_file}")
-        except Exception as e:
-            logger.warning(f"缓存读取失败: {e}，将重新拉取")
 
         self._cache_loaded = True
 
     def _save_cache(self, data: list[DataPoint]):
-        """将数据写入本地缓存（增量合并）。"""
-        # 合并：新数据覆盖旧数据
-        existing = {self._point_key(d): d for d in self._all_data}
-        for d in data:
-            existing[self._point_key(d)] = d
-        merged = list(existing.values())
-
-        output = {
-            "cached_at": datetime.now().isoformat(),
-            "count": len(merged),
-            "data": [d.to_dict() for d in merged],
-        }
-
-        self._cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._cache_file, "w", encoding="utf-8") as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
-
-        self._all_data = merged
-        logger.info(f"缓存已更新: {self._cache_file} ({len(merged)} 条)")
+        """通过 CPIStore 写入本地缓存（增量合并）。"""
+        count = self._store.save(data)
+        self._all_data = self._store.load(force=True)
+        logger.info(f"缓存已更新: {count} 条")
 
     # ── 内部：API 拉取 ────────────────────────────────
 
@@ -323,8 +283,9 @@ class CPIManager:
                     if d_name == cond_val:
                         result.append(d)
                         break
-                    # 模糊匹配（子串包含）
-                    if cond_val in d_name:
+                    # 短关键词（≤10字符）做模糊匹配（子串包含），
+                    # 避免长名称如"居民消费价格指数"误匹配"居住类居民消费价格指数"
+                    if len(cond_val) <= 10 and cond_val in d_name:
                         result.append(d)
                         break
 

@@ -49,21 +49,151 @@ HEADERS = {
 
 # ── esData API 固定参数（CPI 专项页面）────────────────
 
-CID = "5c7452825c7c4dcba391db5ca7f335c5"
-ROOT_ID = "fc982599aa684be7969d7b90b1bd0e84"
 DEFAULT_DA = [{"text": "全国", "value": "000000000000"}]
 
-# ── CPI 指标 UUID 注册表 ──────────────────────────────
+# ── CID 周期注册表 ────────────────────────────────────────
 #
-# 从新版 esData API 返回结果中提取的 UUID → 中文名映射。
-# 以"上年同月=100"的 CPI 细分指标为主（共 13 个二级分类）。
+# 国家统计局 esData API 对不同年份段使用不同的 cid 和 indicatorIds。
+# 每个周期对应一个独立的数据目录（catalog），指标 UUID 各不相同。
+#
+# 数据来源：server/crawler/sources/cpi.md
 
-# ── 运行时校验缓存 ────────────────────────────────
-# 记录 parse() 时发现的 UUID ↔ 名称不匹配，避免重复警告
-_uuid_warnings_emitted: set[str] = set()
+CID_PERIODS = [
+    {
+        "label": "2026-2030",
+        "years": (2026, 2030),
+        "cid": "5c7452825c7c4dcba391db5ca7f335c5",
+        "root_id": "fc982599aa684be7969d7b90b1bd0e84",
+        "indicator_ids": [
+            "53180dfb9c14411ba4b762307c85920c",
+            "42c2d9b5d1b749c4b68c2cbd2e3d4a42",
+            "23db96d6f25c4acbb8801616fc2e509d",
+            "4fb7ea343fc7403bb412cf48fb2f3f0e",
+            "e4a6cd580cfe43c3a92140d2edb5e7df",
+            "e6e42078f30e483b899b2701a766909a",
+            "e2636c6c7549458ca90057f9b7eff442",
+            "27cc82bede504fbc896c02a412bc7671",
+            "2cf481203dd0404c8b778d435d401c7a",
+            "f91a869a255949ccba0cd73cfa871340",
+            "61a170ad7fa44fa4b2ff60fd708e516e",
+            "c87191b714554e9eba8c2c062abfabb4",
+            "71be3d43d2fb44188199840272463ae0",
+        ],
+    },
+    {
+        "label": "2021-2025",
+        "years": (2021, 2025),
+        "cid": "809d2522b0fe4be89142650341b19083",
+        "root_id": "fc982599aa684be7969d7b90b1bd0e84",
+        "indicator_ids": [
+            "4ae9047687934a6390984c21d6ddab96",
+            "fce9ac527a74442ea0031eb6b37f52ad",
+            "b2830210c9bc427ba3549fea592b2c90",
+            "e492fe37645349f0a1c84d96174bf606",
+            "a8437c1e6cfc41d3b08f10e63df7a9c3",
+            "5fdc380a7f65401f9df852e9fb805d50",
+            "77d9645f8acf4f28b397213b14bc8088",
+            "0405e430a16c49eba5a83f9341ff7615",
+            "71b1221d90734165b7d1c8ce03f116aa",
+            "728da4f1859140139194110824b700e1",
+            "24371d6f24ce4f11921cb6194bb1e96b",
+            "e330ad10ab224cfda1f25db93bf04d01",
+            "c2050e97c49a4763a6d0f0f38bf0b4ed",
+        ],
+    },
+    {
+        "label": "2016-2020",
+        "years": (2016, 2020),
+        "cid": "9d4eec43537742a7ab5d63db97fa2f51",
+        "root_id": "fc982599aa684be7969d7b90b1bd0e84",
+        "indicator_ids": [
+            "e5c318ffdbbc4d38898e52b52267eb25",
+            "00f5d26484104d8b8cced5f1658890aa",
+            "4af9cad04aab440591aa32899c464bb6",
+            "33bec38ee0a2445182cbd90e3ea87b18",
+            "1d66582cffd54f349231cf254cef88e4",
+            "93b825e3154040a69fa931a4cc4f3db0",
+            "714e882b77ca4e558d59971b20351925",
+            "c8049c1b181e4c0d83d5b979aaa9c7b4",
+            "124a6b4dad6b42e596969818272f4968",
+        ],
+    },
+    {
+        "label": "2000-2015",
+        "years": (2000, 2015),
+        "cid": "954cfd7597e34b919ec71caf6aeead51",
+        "root_id": "fc982599aa684be7969d7b90b1bd0e84",
+        "indicator_ids": [
+            "4c1065dd4e984b25a21190c843551697",
+            "fc58c0bcc74b4ade96c93f803cfa0020",
+            "bb855fa333ad4ce48edc78055d023603",
+            "8f705416a1e04bdf8fd7002f0209fd05",
+            "4079a67901334af28ba9c1a7d35ef058",
+            "e0a62989dd57441699681be1fc3dcd19",
+            "b2e9721e8f25476a8dd16fbd42ea4465",
+            "c4da9e5a6ffa44ef8b6b472c5ab15e8e",
+            "e3699d701ef8465c892103859a27900b",
+        ],
+    },
+]
 
+# ── 当前默认配置（兼容旧代码）───────────────────────
+# 默认使用 2026-2030 周期
+_DEFAULT_PERIOD_CONFIG = CID_PERIODS[0]
+CID = _DEFAULT_PERIOD_CONFIG["cid"]
+ROOT_ID = _DEFAULT_PERIOD_CONFIG["root_id"]
+
+# ── 工具：根据年份查找对应周期配置 ──────────────────
+
+def get_period_config(year: int) -> dict:
+    """
+    根据年份查找对应的 CID 周期配置。
+
+    Args:
+        year: 年份，如 2023
+
+    Returns:
+        周期配置 dict，包含 cid, root_id, indicator_ids, years, label
+
+    Raises:
+        ValueError: 如果找不到匹配的周期
+    """
+    for period in CID_PERIODS:
+        start, end = period["years"]
+        if start <= year <= end:
+            return period
+    raise ValueError(f"找不到年份 {year} 对应的 CID 周期配置")
+
+
+def get_period_config_for_range(year_start: int, year_end: int) -> list[dict]:
+    """
+    获取覆盖 [year_start, year_end] 的所有周期配置（可能多个）。
+
+    Args:
+        year_start: 起始年份
+        year_end: 结束年份
+
+    Returns:
+        周期配置列表（按时间顺序排列）
+    """
+    result = []
+    for period in CID_PERIODS:
+        p_start, p_end = period["years"]
+        if p_start <= year_end and p_end >= year_start:
+            result.append(period)
+    return result
+
+
+# ── CPI 指标 UUID 注册表（全周期） ─────────────────────
+#
+# 从 esData API 返回结果中提取的 UUID → 中文名映射。
+# 包含所有周期内的指标 UUID。指标名由 API 返回的 i_showname 决定，
+# 该注册表仅作为兜底/校验用。
+#
+# TODO: 通过 discover_indicators() 自动发现并补充未知 UUID 的名称
 
 CPI_UUID_INDICATORS = {
+    # ── 2026-2030 周期（13 项） ──
     "53180dfb9c14411ba4b762307c85920c": "居民消费价格指数 (上年同月=100)",
     "42c2d9b5d1b749c4b68c2cbd2e3d4a42": "食品烟酒及在外餐饮类居民消费价格指数(上年同月=100)",
     "23db96d6f25c4acbb8801616fc2e509d": "衣着类居民消费价格指数 (上年同月=100)",
@@ -77,8 +207,51 @@ CPI_UUID_INDICATORS = {
     "61a170ad7fa44fa4b2ff60fd708e516e": "消费品居民消费价格指数 (上年同月=100)",
     "c87191b714554e9eba8c2c062abfabb4": "服务居民消费价格指数 (上年同月=100)",
     "71be3d43d2fb44188199840272463ae0": "不包括食品和能源居民消费价格指数 (上年同月=100)",
+
+    # ── 2021-2025 周期（13 项） ──
+    # TODO: 通过 discover_indicators() 自动发现
+    "4ae9047687934a6390984c21d6ddab96": "居民消费价格指数(上年同月=100)",
+    "fce9ac527a74442ea0031eb6b37f52ad": "食品烟酒类居民消费价格指数(上年同月=100)",
+    "b2830210c9bc427ba3549fea592b2c90": "衣着类居民消费价格指数(上年同月=100)",
+    "e492fe37645349f0a1c84d96174bf606": "居住类居民消费价格指数(上年同月=100)",
+    "a8437c1e6cfc41d3b08f10e63df7a9c3": "生活用品及服务类居民消费价格指数(上年同月=100)",
+    "5fdc380a7f65401f9df852e9fb805d50": "交通通信类居民消费价格指数(上年同月=100)",
+    "77d9645f8acf4f28b397213b14bc8088": "教育文化娱乐类居民消费价格指数(上年同月=100)",
+    "0405e430a16c49eba5a83f9341ff7615": "医疗保健类居民消费价格指数(上年同月=100)",
+    "71b1221d90734165b7d1c8ce03f116aa": "其他用品及服务类居民消费价格指数(上年同月=100)",
+    "728da4f1859140139194110824b700e1": "非食品居民消费价格指数(上年同月=100)",
+    "24371d6f24ce4f11921cb6194bb1e96b": "消费品居民消费价格指数(上年同月=100)",
+    "e330ad10ab224cfda1f25db93bf04d01": "服务居民消费价格指数(上年同月=100)",
+    "c2050e97c49a4763a6d0f0f38bf0b4ed": "不包括食品和能源居民消费价格指数(上年同月=100)",
+
+    # ── 2016-2020 周期（9 项） ──
+    # TODO: 通过 discover_indicators() 自动发现
+    "e5c318ffdbbc4d38898e52b52267eb25": "居民消费价格指数",
+    "00f5d26484104d8b8cced5f1658890aa": "城市居民消费价格指数",
+    "4af9cad04aab440591aa32899c464bb6": "农村居民消费价格指数",
+    "33bec38ee0a2445182cbd90e3ea87b18": "食品类居民消费价格指数",
+    "1d66582cffd54f349231cf254cef88e4": "烟酒及用品类居民消费价格指数",
+    "93b825e3154040a69fa931a4cc4f3db0": "衣着类居民消费价格指数",
+    "714e882b77ca4e558d59971b20351925": "家庭设备用品及维修服务类居民消费价格指数",
+    "c8049c1b181e4c0d83d5b979aaa9c7b4": "医疗保健和个人用品类居民消费价格指数",
+    "124a6b4dad6b42e596969818272f4968": "交通和通信类居民消费价格指数",
+
+    # ── 2000-2015 周期（9 项） ──
+    # TODO: 通过 discover_indicators() 自动发现
+    "4c1065dd4e984b25a21190c843551697": "居民消费价格指数",
+    "fc58c0bcc74b4ade96c93f803cfa0020": "城市居民消费价格指数",
+    "bb855fa333ad4ce48edc78055d023603": "农村居民消费价格指数",
+    "8f705416a1e04bdf8fd7002f0209fd05": "食品类居民消费价格指数",
+    "4079a67901334af28ba9c1a7d35ef058": "烟酒及用品类居民消费价格指数",
+    "e0a62989dd57441699681be1fc3dcd19": "衣着类居民消费价格指数",
+    "b2e9721e8f25476a8dd16fbd42ea4465": "家庭设备用品及维修服务类居民消费价格指数",
+    "c4da9e5a6ffa44ef8b6b472c5ab15e8e": "医疗保健和个人用品类居民消费价格指数",
+    "e3699d701ef8465c892103859a27900b": "交通和通信类居民消费价格指数",
 }
 
+
+# ── CPI 分组（仅 2026-2030 / 2021-2025 周期的 13 项分组） ──
+# 注意：2016-2020 和 2000-2015 周期的指标不同（9 项），暂不分组
 CPI_GROUPS = {
     "全部CPI(13项)": [
         "53180dfb9c14411ba4b762307c85920c",
@@ -108,7 +281,48 @@ CPI_GROUPS = {
 }
 
 
+# ── 运行时校验缓存 ────────────────────────────────
+# 记录 parse() 时发现的 UUID ↔ 名称不匹配，避免重复警告
+_uuid_warnings_emitted: set[str] = set()
+
+
 # ── 工具函数 ──────────────────────────────────────────────
+
+def _extract_year_from_period(period: str) -> int | None:
+    """
+    从 period 字符串中提取年份，用于自动选择 CID 周期。
+
+    例如：
+      "202605"        → 2026
+      "202406-202605" → 2026（取结束年份）
+      "200001-200012" → 2000
+      "2026"          → 2026
+      "1949-"         → 2026（动态取当前年份）
+    """
+    period = period.strip()
+    if not period:
+        return None
+
+    # 范围格式：取结束年份
+    if "-" in period and period != "-":
+        parts = period.split("-", 1)
+        end_part = parts[1].strip()
+        if end_part:
+            # "1949-" 开放范围 → 当前年份
+            if not end_part:
+                return datetime.now().year
+            # 提取年份
+            digits = "".join(c for c in end_part if c.isdigit())
+            if len(digits) >= 4:
+                return int(digits[:4])
+
+    # 单月/单年格式
+    digits = "".join(c for c in period if c.isdigit())
+    if len(digits) >= 4:
+        return int(digits[:4])
+
+    return None
+
 
 def _safe_float(v: str) -> float | None:
     if not v or not v.strip():
@@ -229,11 +443,13 @@ class CPISource(DataSource):
     def __init__(self, indicator_ids: list[str] | None = None,
                  period: str = "202406-202605",
                  das: list[dict] | None = None,
-                 da_catalog_id: str = ""):
+                 da_catalog_id: str = "",
+                 cid: str | None = None,
+                 root_id: str | None = None):
         """
         Args:
             indicator_ids: CPI 指标 UUID 列表。
-                默认为全部 13 个 CPI 细分指标（上年同月=100）。
+                默认为根据 period 自动选择对应周期的全部指标。
             period: 时间段。
                 "202605"        → 单月
                 "202406-202605" → 范围（默认，最近 12 个月）
@@ -242,12 +458,37 @@ class CPISource(DataSource):
             das: 地区选择。默认为全国。
                 [{"text": "全国", "value": "000000000000"}]
             da_catalog_id: 地区目录 ID，通常为空字符串。
+            cid: 手动指定 CID，默认根据 period 自动选择。
+            root_id: 手动指定 rootId，默认根据 CID 周期自动选择。
         """
-        if indicator_ids is None:
-            indicator_ids = list(CPI_UUID_INDICATORS.keys())
         if das is None:
             das = DEFAULT_DA
 
+        # ── 自动选择 CID 和 indicator_ids ──
+        self._period_config = None
+        if cid is None:
+            # 从 period 推断年份，自动选择 CID
+            year = _extract_year_from_period(period)
+            if year is not None:
+                try:
+                    self._period_config = get_period_config(year)
+                    cid = self._period_config["cid"]
+                    root_id = self._period_config["root_id"]
+                    if indicator_ids is None:
+                        indicator_ids = list(self._period_config["indicator_ids"])
+                except ValueError:
+                    pass
+
+        # 如果上述自动选择失败，使用默认
+        if cid is None:
+            cid = _DEFAULT_PERIOD_CONFIG["cid"]
+        if root_id is None:
+            root_id = _DEFAULT_PERIOD_CONFIG["root_id"]
+        if indicator_ids is None:
+            indicator_ids = list(_DEFAULT_PERIOD_CONFIG["indicator_ids"])
+
+        self.cid = cid
+        self.root_id = root_id
         self.indicator_ids = indicator_ids
         self.period = period
         self.das = das
@@ -283,12 +524,12 @@ class CPISource(DataSource):
         dts = _period_to_dts(self.period)
 
         payload = {
-            "cid": CID,
+            "cid": self.cid,
             "daCatalogId": self.da_catalog_id,
             "das": self.das,
             "dts": dts,
             "indicatorIds": self.indicator_ids,
-            "rootId": ROOT_ID,
+            "rootId": self.root_id,
             "showType": "1",
         }
 
@@ -303,18 +544,17 @@ class CPISource(DataSource):
         resp.raise_for_status()
         return resp.json()
 
-    @classmethod
-    def _check_cid(cls, raw: dict):
-        """检查 API 返回的 catalogid 是否与预设 CID 一致。"""
+    def _check_cid(self, raw: dict):
+        """检查 API 返回的 catalogid 是否与当前 CID 一致。"""
         data_list = raw.get("data", [])
         if not data_list:
             return
         for period in data_list:
             for val in period.get("values", []):
                 api_cid = val.get("catalogid", "")
-                if api_cid and api_cid != CID:
+                if api_cid and api_cid != self.cid:
                     logger.warning(
-                        f"CID 不匹配！预设: {CID}, API 返回: {api_cid}. "
+                        f"CID 不匹配！当前: {self.cid}, API 返回: {api_cid}. "
                         f"CPI 注册表可能需要更新。"
                     )
                     return
@@ -420,6 +660,8 @@ class CPISource(DataSource):
                         "indicator_uuid": uuid,
                         "period_code": sj_code,
                         "period_name": period_name,
+                        "cid": self.cid,
+                        "period_label": self._period_config["label"] if self._period_config else None,
                     },
                 ))
 
@@ -428,25 +670,36 @@ class CPISource(DataSource):
     # ── 辅助方法 ──────────────────────────────────────
 
     @classmethod
-    def list_indicators(cls, group: str = None) -> list[dict]:
+    def list_indicators(cls, group: str = None,
+                        period_label: str = None) -> list[dict]:
         """
         列出 CPI 指标（UUID 版）。
         Args:
             group: 分组名，None 表示全部
+            period_label: 周期标签，如 "2026-2030"，None 表示全部周期
         Returns:
-            [{"uuid": ..., "name": ..., "group": ...}]
+            [{"uuid": ..., "name": ..., "group": ..., "period": ...}]
         """
         uuid_to_group = {}
         for g, uuids in CPI_GROUPS.items():
             for u in uuids:
                 uuid_to_group[u] = g
 
+        # 建立 UUID → 周期标签 映射
+        uuid_to_period = {}
+        for period in CID_PERIODS:
+            for uuid in period["indicator_ids"]:
+                uuid_to_period[uuid] = period["label"]
+
         results = []
         for uuid, name in CPI_UUID_INDICATORS.items():
             g = uuid_to_group.get(uuid, "其他")
+            p = uuid_to_period.get(uuid, "未知")
             if group and g != group:
                 continue
-            results.append({"uuid": uuid, "name": name, "group": g})
+            if period_label and p != period_label:
+                continue
+            results.append({"uuid": uuid, "name": name, "group": g, "period": p})
         return results
 
     @classmethod
@@ -471,8 +724,7 @@ class CPISource(DataSource):
                 "cid_match": True,      # CID 是否匹配
             }
         """
-        source = cls(indicator_ids=list(CPI_UUID_INDICATORS.keys()),
-                     period=period)
+        source = cls(period=period)
         raw = source.fetch()
 
         result = {
@@ -481,6 +733,8 @@ class CPISource(DataSource):
             "mismatches": [],
             "unknown": [],
             "cid_match": True,
+            "cid": source.cid,
+            "period_label": source._period_config["label"] if source._period_config else None,
         }
 
         if not raw.get("success"):
@@ -491,7 +745,7 @@ class CPISource(DataSource):
         for period_entry in raw.get("data", []):
             for val in period_entry.get("values", []):
                 api_cid = val.get("catalogid", "")
-                if api_cid and api_cid != CID:
+                if api_cid and api_cid != source.cid:
                     result["cid_match"] = False
                     break
 
@@ -529,9 +783,80 @@ class CPISource(DataSource):
         if result["unknown"]:
             logger.warning(f"发现 {len(result['unknown'])} 个未知 UUID！")
         if not result["cid_match"]:
-            logger.warning(f"CID 不匹配！预设: {CID}")
+            logger.warning(f"CID 不匹配！预设: {source.cid}")
 
         return result
+
+    # ── 指标自动发现 ──────────────────────────────────
+
+    @classmethod
+    def discover_indicators(cls,
+                            period_labels: list[str] | None = None
+                            ) -> dict[str, dict]:
+        """
+        自动发现指标：对每个 CID 周期发请求，从 API 返回中提取 UUID → 名称映射。
+
+        用法：
+            result = CPISource.discover_indicators()
+            for uuid, info in result.items():
+                print(f"{uuid} → {info['name']} ({info['period']})")
+
+        Args:
+            period_labels: 要探索的周期标签列表，None 表示全部周期。
+                如 ["2000-2015", "2016-2020", "2021-2025", "2026-2030"]
+
+        Returns:
+            { uuid: {"name": ..., "unit": ..., "period": ...} }
+        """
+        import time as _time
+
+        now = datetime.now()
+        results = {}
+
+        for period in CID_PERIODS:
+            label = period["label"]
+            if period_labels and label not in period_labels:
+                continue
+
+            # 取周期中间年份作为查询月份
+            p_start, p_end = period["years"]
+            if now.year < p_start:
+                # 未来周期，跳过
+                continue
+            query_year = min(now.year, p_end)
+            query_period = f"{query_year}{now.month:02d}"
+
+            logger.info(f"探索周期 {label} (cid={period['cid']}): 查询 {query_period}")
+
+            try:
+                source = cls(period=query_period)
+                raw = source.fetch()
+
+                if not raw.get("success"):
+                    logger.warning(f"  API 异常: {raw.get('message')}")
+                    continue
+
+                for period_entry in raw.get("data", []):
+                    for val in period_entry.get("values", []):
+                        uuid = val.get("_id", "")
+                        name = val.get("i_showname", "").strip()
+                        unit = val.get("du_name", "")
+                        if uuid and name and uuid not in results:
+                            results[uuid] = {
+                                "name": name,
+                                "unit": unit,
+                                "period": label,
+                            }
+
+                logger.info(f"  发现 {sum(1 for v in results.values() if v['period'] == label)} 个指标")
+
+            except Exception as e:
+                logger.warning(f"  探索失败: {e}")
+
+            # 请求间隔
+            _time.sleep(1.0)
+
+        return results
 
     @staticmethod
     def calc_yoy(data: list[DataPoint]) -> list[dict]:
