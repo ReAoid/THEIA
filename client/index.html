@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>THEIA · CPI 数据仪表盘</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- 顶部导航 -->
+  <header class="header">
+    <div class="header-inner">
+      <h1 class="logo">📈 THEIA <span class="logo-sub">CPI 数据仪表盘</span></h1>
+      <div class="header-controls">
+        <select id="indicator-select" class="select-input" title="选择指标">
+          <option value="">-- 加载中 --</option>
+        </select>
+        <select id="group-select" class="select-input" title="选择分组">
+          <option value="">全部分组</option>
+        </select>
+        <select id="period-select" class="select-input" title="选择时间段">
+          <option value="202601-202605">近 5 个月</option>
+          <option value="202406-202605" selected>近 12 个月</option>
+          <option value="202301-202512">近 3 年</option>
+          <option value="202101-202512">近 5 年</option>
+        </select>
+        <button id="refresh-btn" class="btn btn-primary" title="刷新数据">🔄 刷新</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- 概览卡片 -->
+    <section id="overview-section" class="section">
+      <div id="overview-grid" class="overview-grid">
+        <div class="loading">加载中...</div>
+      </div>
+    </section>
+
+    <!-- 趋势图 -->
+    <section class="section">
+      <div class="card chart-card">
+        <div class="card-header">
+          <h2>📊 CPI 走势图</h2>
+          <div class="chart-tabs">
+            <button class="chart-tab active" data-type="line">折线图</button>
+            <button class="chart-tab" data-type="growth">增长率</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <canvas id="mainChart" height="320"></canvas>
+          <div id="chart-empty" class="empty-state" style="display:none;">
+            <p>📭 暂无图表数据</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 数据表格 -->
+    <section class="section">
+      <div class="card">
+        <div class="card-header">
+          <h2>📋 数据明细</h2>
+          <div class="table-info">
+            <span id="table-count">0 条</span>
+          </div>
+        </div>
+        <div class="card-body table-wrapper">
+          <table id="data-table">
+            <thead>
+              <tr>
+                <th data-sort="date">日期 <span class="sort-icon">↕</span></th>
+                <th data-sort="indicator">指标 <span class="sort-icon">↕</span></th>
+                <th data-sort="value">数值 <span class="sort-icon">↕</span></th>
+                <th data-sort="unit">单位</th>
+                <th data-sort="region">地区</th>
+              </tr>
+            </thead>
+            <tbody id="table-body">
+              <tr><td colspan="5" class="loading-cell">加载中...</td></tr>
+            </tbody>
+          </table>
+          <div id="table-empty" class="empty-state" style="display:none;">
+            <p>📭 暂无数据</p>
+          </div>
+        </div>
+        <!-- 分页 -->
+        <div class="card-footer" id="pagination">
+          <button id="page-prev" class="btn btn-small" disabled>← 上一页</button>
+          <span id="page-info">第 1 / 1 页</span>
+          <button id="page-next" class="btn btn-small" disabled>下一页 →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 统计摘要 -->
+    <section class="section">
+      <div class="card">
+        <div class="card-header">
+          <h2>📐 统计摘要</h2>
+        </div>
+        <div class="card-body">
+          <div id="summary-grid" class="summary-detail-grid">
+            <div class="loading">加载中...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>数据来源：国家统计局 · 居民消费价格指数(CPI) · <a href="/api/v1/cpi/overview" target="_blank">API</a></p>
+  </footer>
+
+  <script type="module" src="/js/api.js"></script>
+  <script type="module" src="/js/charts.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
