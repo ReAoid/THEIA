@@ -112,15 +112,20 @@ class CPIManager:
         # 1. 缓存加载（懒加载）
         self._load_cache()
 
-        # 2. 判断是否需要拉取
-        need_fetch = force_update or not self._all_data
+        # 2. 判断是否需要从 API 拉取
+        #    - 强制刷新：拉取指定时间段
+        #    - 本地无数据：拉默认最近 12 个月
+        #    - 本地数据不全（缺某时间段）：自动补全
+        need_fetch = force_update
+        if not need_fetch and not self._all_data:
+            need_fetch = True
+            period = period or "202406-202605"
         if not need_fetch and period is not None:
-            # 检查缓存是否覆盖了请求的时间段
             need_fetch = not self._cache_covers_period(period)
 
-        # 3. 拉取
+        # 3. 从 API 拉取（无 7 天过期限制，本地有就直接用）
         if need_fetch:
-            self._fetch_from_api(period=period, force_update=force_update)
+            self._fetch_from_api(period=period)
 
         # 4. 筛选指标
         data = self._all_data
@@ -129,7 +134,7 @@ class CPIManager:
         elif indicators is not None and indicators != "all":
             data = self._filter_by_indicators(data, indicators)
 
-        # 5. 按时间段再过滤（如果缓存比请求范围大）
+        # 5. 按时间段过滤
         if period is not None and not need_fetch:
             data = self._filter_by_period(data, period)
 
@@ -204,23 +209,14 @@ class CPIManager:
 
     # ── 内部：API 拉取 ────────────────────────────────
 
-    def _fetch_from_api(self, period: str | None = None,
-                        force_update: bool = False):
+    def _fetch_from_api(self, period: str | None = None):
         """
-        从 API 拉取数据。
+        从 API 拉取数据（仅拉取指定时间段）。
 
-        - force_update=True：全量拉取（默认 5 年）
-        - 否则：只拉指定时间段
+        Args:
+            period: 要拉取的时间段，None 则默认最近 12 个月。
         """
         effective_period = period or "202406-202605"  # 默认最近 12 个月
-
-        if force_update:
-            # 强制更新：拉 5 年全覆盖
-            now = datetime.now()
-            end = f"{now.year}{now.month:02d}"
-            start = f"{now.year - 5}{now.month:02d}"
-            effective_period = f"{start}-{end}"
-            logger.info(f"强制更新: 拉取 {effective_period}")
 
         # 用 CPISource 拉取全部 13 个指标
         source = CPISource(period=effective_period)

@@ -139,13 +139,17 @@ class BaseStore(ABC, Generic[T]):
 
     def is_valid(self) -> bool:
         """
-        检查缓存文件是否存在且在有效期内。
+        检查缓存文件是否存在（无过期限制，除非主动设置 max_age_hours）。
 
         Returns:
             True 表示缓存可用
         """
         if not self.cache_file.exists():
             return False
+
+        # max_age_hours < 0 表示永不过期
+        if self.max_age_hours < 0:
+            return True
 
         age_seconds = time.time() - self.cache_file.stat().st_mtime
         age_hours = age_seconds / 3600
