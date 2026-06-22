@@ -178,9 +178,9 @@ class TestFilterIndicators:
         assert len(data) == 12  # 4 指标 × 3 月
 
     def test_filter_by_group_all(self, mgr_with_cache):
+        # "全部CPI(13项)" 分组已移除，未知分组返回空
         data = mgr_with_cache.get_cpi(group="全部CPI(13项)")
-        # 缓存中只有 4 个 uuid 匹配该分组，应该返回全部 12 条
-        assert len(data) == 12
+        assert len(data) == 0
 
     def test_filter_by_group_core_cpi(self, mgr_with_cache):
         data = mgr_with_cache.get_cpi(group="核心CPI(8项)")

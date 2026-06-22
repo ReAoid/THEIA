@@ -3,115 +3,275 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>THEIA · CPI 数据仪表盘</title>
+  <title>THEIA · 经济数据仪表盘</title>
   <link rel="stylesheet" href="/css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <!-- 顶部导航 -->
-  <header class="header">
-    <div class="header-inner">
-      <h1 class="logo">📈 THEIA <span class="logo-sub">CPI 数据仪表盘</span></h1>
-      <div class="header-controls">
-        <select id="indicator-select" class="select-input" title="选择指标">
-          <option value="">-- 加载中 --</option>
-        </select>
-        <select id="group-select" class="select-input" title="选择分组">
-          <option value="">全部分组</option>
-        </select>
-        <select id="period-select" class="select-input" title="选择时间段">
-          <option value="202601-202605">近 5 个月</option>
-          <option value="202406-202605" selected>近 12 个月</option>
-          <option value="202301-202512">近 3 年</option>
-          <option value="202101-202512">近 5 年</option>
-        </select>
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1 class="sidebar-logo">📊 THEIA</h1>
+      <p class="sidebar-subtitle">经济数据平台</p>
+    </div>
+
+    <nav class="sidebar-nav">
+      <ul>
+        <li>
+          <a href="#" class="nav-link active" data-section="dashboard">
+            <span class="nav-icon">📈</span>
+            <span class="nav-label">仪表盘总览</span>
+          </a>
+        </li>
+        <li>
+          <a href="#" class="nav-link" data-section="cpi">
+            <span class="nav-icon">🏛️</span>
+            <span class="nav-label">CPI 消费价格</span>
+          </a>
+        </li>
+        <li class="nav-divider"></li>
+        <li>
+          <a href="#" class="nav-link" data-section="analysis">
+            <span class="nav-icon">🔍</span>
+            <span class="nav-label">深度分析</span>
+          </a>
+        </li>
+        <li class="nav-divider"></li>
+        <li>
+          <a href="#" class="nav-link" data-section="settings">
+            <span class="nav-icon">⚙️</span>
+            <span class="nav-label">数据设置</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-status">
+        <span class="status-dot"></span>
+        <span class="status-text">数据已同步</span>
+      </div>
+      <span class="sidebar-version">v1.2.0</span>
+    </div>
+  </aside>
+
+  <!-- ===== 主内容区 ===== -->
+  <div class="main-wrapper">
+
+    <!-- 顶部工具栏 -->
+    <header class="toolbar">
+      <div class="toolbar-left">
+        <button id="sidebar-toggle" class="toolbar-btn" title="切换侧边栏">☰</button>
+        <span id="toolbar-title" class="toolbar-title">仪表盘总览</span>
+        <span id="last-update" class="toolbar-meta">刚刚更新</span>
+      </div>
+      <div class="toolbar-right">
         <button id="refresh-btn" class="btn btn-primary" title="刷新数据">🔄 刷新</button>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <main class="main">
-    <!-- 概览卡片 -->
-    <section id="overview-section" class="section">
-      <div id="overview-grid" class="overview-grid">
-        <div class="loading">加载中...</div>
-      </div>
-    </section>
+    <!-- 页面内容 -->
+    <main class="main-content" id="main-content">
 
-    <!-- 趋势图 -->
-    <section class="section">
-      <div class="card chart-card">
-        <div class="card-header">
-          <h2>📊 CPI 走势图</h2>
-          <div class="chart-tabs">
-            <button class="chart-tab active" data-type="line">折线图</button>
-            <button class="chart-tab" data-type="growth">增长率</button>
+      <!-- ==================== 仪表盘总览 ==================== -->
+      <section id="section-dashboard" class="page-section">
+        <div class="empty-page-state">
+          <div class="empty-page-icon">📊</div>
+          <h3>欢迎使用 THEIA 经济数据平台</h3>
+          <p>本平台提供居民消费价格指数（CPI）数据的查询、分析和可视化服务。</p>
+          <div class="empty-page-actions">
+            <a href="#" class="btn btn-primary" onclick="switchSection('cpi')">🏛️ 进入 CPI 消费价格 →</a>
           </div>
         </div>
-        <div class="card-body">
-          <canvas id="mainChart" height="320"></canvas>
-          <div id="chart-empty" class="empty-state" style="display:none;">
-            <p>📭 暂无图表数据</p>
-          </div>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 数据表格 -->
-    <section class="section">
-      <div class="card">
-        <div class="card-header">
-          <h2>📋 数据明细</h2>
-          <div class="table-info">
-            <span id="table-count">0 条</span>
-          </div>
-        </div>
-        <div class="card-body table-wrapper">
-          <table id="data-table">
-            <thead>
-              <tr>
-                <th data-sort="date">日期 <span class="sort-icon">↕</span></th>
-                <th data-sort="indicator">指标 <span class="sort-icon">↕</span></th>
-                <th data-sort="value">数值 <span class="sort-icon">↕</span></th>
-                <th data-sort="unit">单位</th>
-                <th data-sort="region">地区</th>
-              </tr>
-            </thead>
-            <tbody id="table-body">
-              <tr><td colspan="5" class="loading-cell">加载中...</td></tr>
-            </tbody>
-          </table>
-          <div id="table-empty" class="empty-state" style="display:none;">
-            <p>📭 暂无数据</p>
-          </div>
-        </div>
-        <!-- 分页 -->
-        <div class="card-footer" id="pagination">
-          <button id="page-prev" class="btn btn-small" disabled>← 上一页</button>
-          <span id="page-info">第 1 / 1 页</span>
-          <button id="page-next" class="btn btn-small" disabled>下一页 →</button>
-        </div>
-      </div>
-    </section>
+      <!-- ==================== CPI 消费价格 ==================== -->
+      <section id="section-cpi" class="page-section active">
 
-    <!-- 统计摘要 -->
-    <section class="section">
-      <div class="card">
-        <div class="card-header">
-          <h2>📐 统计摘要</h2>
-        </div>
-        <div class="card-body">
-          <div id="summary-grid" class="summary-detail-grid">
-            <div class="loading">加载中...</div>
+        <!-- KPI 行 -->
+        <div class="kpi-row">
+          <div class="kpi-card" style="--kpi-accent: #4361ee;">
+            <div class="kpi-icon">📊</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据总量</div>
+              <div class="kpi-value" id="kpi-total">--</div>
+              <div class="kpi-change positive">↑ 较上月 +2.1%</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #06d6a0;">
+            <div class="kpi-icon">🏷️</div>
+            <div class="kpi-body">
+              <div class="kpi-label">指标数量</div>
+              <div class="kpi-value" id="kpi-indicators">--</div>
+              <div class="kpi-change">覆盖 8 个分组</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #ef476f;">
+            <div class="kpi-icon">📈</div>
+            <div class="kpi-body">
+              <div class="kpi-label">最新 CPI</div>
+              <div class="kpi-value" id="kpi-latest-cpi">--</div>
+              <div class="kpi-change" id="kpi-cpi-change"></div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #ffd166;">
+            <div class="kpi-icon">📅</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据时间跨度</div>
+              <div class="kpi-value" id="kpi-timespan">--</div>
+              <div class="kpi-change">含当前月份</div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
-  </main>
 
-  <footer class="footer">
-    <p>数据来源：国家统计局 · 居民消费价格指数(CPI) · <a href="/api/v1/cpi/overview" target="_blank">API</a></p>
-  </footer>
+        <!-- 仪表盘网格 -->
+        <div class="dashboard-grid">
+          <!-- Widget: 走势图（移到最前） -->
+          <div class="widget widget-2col">
+            <div class="widget-header">
+              <h3 class="widget-title">📊 CPI 走势图</h3>
+              <div class="widget-header-right">
+                <div class="chart-period-controls">
+                  <div class="period-range">
+                    <input type="text" class="period-input period-start" id="period-start"
+                           placeholder="YYYYMM"
+                           value="202505"
+                           maxlength="6"
+                           title="起始月份，格式：YYYYMM，如 202505">
+                    <span class="period-separator">—</span>
+                    <input type="text" class="period-input period-end" id="period-end"
+                           placeholder="YYYYMM"
+                           value="202605"
+                           maxlength="6"
+                           title="结束月份，格式：YYYYMM，如 202605">
+                  </div>
+                  <div class="period-presets">
+                    <button class="period-preset-btn" data-months="5">近5个月</button>
+                    <button class="period-preset-btn active" data-months="12">近12个月</button>
+                    <button class="period-preset-btn" data-months="36">近3年</button>
+                    <button class="period-preset-btn" data-months="60">近5年</button>
+                  </div>
+                </div>
+                <div class="chart-indicator-selector">
+                  <button class="chart-indicator-btn" id="chart-indicator-btn" title="选择要显示的指标">
+                    📌 选择指标
+                  </button>
+                  <div class="chart-indicator-dropdown" id="chart-indicator-dropdown">
+                    <div class="dropdown-header">
+                      <label class="dropdown-checkall">
+                        <input type="checkbox" id="chart-checkall" checked>
+                        <span>全选 / 取消</span>
+                      </label>
+                    </div>
+                    <div class="dropdown-list" id="chart-indicator-list">
+                      <div class="dropdown-loading">加载中...</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-tabs">
+                  <button class="chart-tab active" data-type="line">折线图</button>
+                  <button class="chart-tab" data-type="growth">增长率</button>
+                </div>
+              </div>
+            </div>
+            <div class="widget-body chart-body">
+              <canvas id="mainChart" height="280"></canvas>
+              <div id="chart-empty" class="empty-state" style="display:none;">
+                <p>📭 暂无图表数据</p>
+              </div>
+              <div id="chart-legend" class="chart-legend"></div>
+            </div>
+          </div>
+
+          <!-- Widget: 概览卡片（移到第二位） -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📋 CPI 核心指标</h3>
+              <span class="widget-badge" id="overview-badge">最新数据</span>
+            </div>
+            <div class="widget-body">
+              <div id="overview-grid" class="overview-grid">
+                <div class="loading">加载中...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Widget: 统计摘要 -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📐 统计摘要</h3>
+            </div>
+            <div class="widget-body">
+              <div id="summary-grid" class="summary-detail-grid">
+                <div class="loading">加载中...</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Widget: 数据明细 -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📋 数据明细</h3>
+              <div class="widget-actions">
+                <span id="table-count" class="table-count">0 条</span>
+              </div>
+            </div>
+            <div class="widget-body table-wrapper">
+              <table id="data-table">
+                <thead>
+                  <tr>
+                    <th data-sort="date">日期 <span class="sort-icon">↕</span></th>
+                    <th data-sort="indicator">指标 <span class="sort-icon">↕</span></th>
+                    <th data-sort="value">数值 <span class="sort-icon">↕</span></th>
+                    <th data-sort="unit">单位</th>
+                    <th data-sort="region">地区</th>
+                  </tr>
+                </thead>
+                <tbody id="table-body">
+                  <tr><td colspan="5" class="loading-cell">加载中...</td></tr>
+                </tbody>
+              </table>
+              <div id="table-empty" class="empty-state" style="display:none;">
+                <p>📭 暂无数据</p>
+              </div>
+            </div>
+            <div class="widget-footer" id="pagination">
+              <button id="page-prev" class="btn btn-small" disabled>← 上一页</button>
+              <span id="page-info">第 1 / 1 页</span>
+              <button id="page-next" class="btn btn-small" disabled>下一页 →</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== 深度分析 ==================== -->
+      <section id="section-analysis" class="page-section">
+        <div class="empty-page-state">
+          <div class="empty-page-icon">🔍</div>
+          <h3>深度分析</h3>
+          <p>对 CPI 数据进行多维分析，包括同比环比、季节性调整、趋势分解等。</p>
+          <p class="empty-page-hint">即将上线，敬请期待</p>
+        </div>
+      </section>
+
+      <!-- ==================== 数据设置 ==================== -->
+      <section id="section-settings" class="page-section">
+        <div class="empty-page-state">
+          <div class="empty-page-icon">⚙️</div>
+          <h3>数据设置</h3>
+          <p>配置数据源、刷新频率、缓存管理等。</p>
+          <p class="empty-page-hint">即将上线，敬请期待</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- 全局悬浮 Tooltip -->
+  <div id="global-tooltip" class="global-tooltip" style="display:none;">
+    <div class="global-tooltip-arrow"></div>
+    <div class="global-tooltip-body"></div>
+  </div>
 
   <script type="module" src="/js/api.js"></script>
   <script type="module" src="/js/charts.js"></script>

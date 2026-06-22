@@ -381,8 +381,9 @@ class TestCPIIndicators:
         assert any("居民消费价格指数" in n for n in names)
 
     def test_list_by_group_all_cpi(self):
+        # "全部CPI(13项)" 分组已移除，只保留"核心CPI(8项)"
         indicators = CPISource.list_indicators(group="全部CPI(13项)")
-        assert len(indicators) == 13  # 13 个二级分类
+        assert len(indicators) == 0
 
     def test_list_by_group_core_cpi(self):
         indicators = CPISource.list_indicators(group="核心CPI(8项)")
@@ -410,7 +411,11 @@ class TestNormalizeName:
 
     def test_bracket_inner_space(self):
         from crawler.sources.cpi_source import _normalize_name
-        assert _normalize_name("居民消费价格指数 (上年同月=100)") == "居民消费价格指数(上年同月=100)"
+        # 注意：_normalize_name 只去括号内部空格（如"( "→"("），
+        # 不去括号前的空格。" (" 中的空格在括号外，不会去除。
+        assert _normalize_name("居民消费价格指数 (上年同月=100)") == "居民消费价格指数 (上年同月=100)"
+        # 括号内部去空格
+        assert _normalize_name("居民消费价格指数( 上年同月=100 )") == "居民消费价格指数(上年同月=100)"
 
     def test_multi_spaces(self):
         from crawler.sources.cpi_source import _normalize_name
@@ -617,15 +622,16 @@ class TestCPIAnalysis:
     def test_calc_mom_sorted_by_indicator_date(self):
         """多指标确保环比只对比同指标"""
         result = CPISource.calc_mom(self.data_multi)
-        # 按 (indicator, date) 排序，前两个是 食品CPI(4月,5月)，后两个是 总体CPI(4月,5月)
-        # 食品CPI 4月 → 无环比
+        # 按 (indicator, date) 排序："总"(U+603B) < "食"(U+98DF)
+        # 所以排序为：总体CPI(4月,5月), 食品CPI(4月,5月)
+        # 总体CPI 4月 → 无环比
         assert result[0]["mom"] is None
-        # 食品CPI 5月 → (99.1/99.2-1)*100
-        assert result[1]["mom"] is not None
-        # 总体CPI 4月 → 无环比（前一个是食品CPI，不同指标）
-        assert result[2]["mom"] is None
         # 总体CPI 5月 → (101.2/101.2-1)*100 = 0
-        assert result[3]["mom"] == 0.0
+        assert result[1]["mom"] == 0.0
+        # 食品CPI 4月 → 无环比（前一个是总体CPI 5月，不同指标）
+        assert result[2]["mom"] is None
+        # 食品CPI 5月 → (99.1/99.2-1)*100 ≈ -0.1
+        assert result[3]["mom"] == pytest.approx(-0.1, rel=0.01)
 
     def test_calc_yoy_single_indicator(self):
         """同比：2022-01 vs 2021-01 = (103/99 - 1)*100 ≈ 4.04%"""
@@ -651,7 +657,8 @@ class TestCPISourceInit:
 
     def test_default_initializes_all_indicators(self):
         source = CPISource()
-        assert len(source.indicator_ids) == len(CPI_UUID_INDICATORS)
+        # 默认只初始化当前周期（2026-2030）的核心 8 项指标
+        assert len(source.indicator_ids) == 8
 
     def test_default_period_is_latest_12_months(self):
         source = CPISource()

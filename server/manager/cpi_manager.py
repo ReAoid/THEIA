@@ -19,7 +19,7 @@ CPI 数据管理者
     data = mgr.get_cpi(indicators=["居住", "教育"])
 
     # 按分组
-    data = mgr.get_cpi(group="核心CPI(8项)")
+    data = mgr.get_cpi(group="八大标准分项")
 
     # 强制刷新（忽略本地缓存）
     data = mgr.get_cpi(force_update=True)
@@ -94,12 +94,12 @@ class CPIManager:
 
         Args:
             indicators: 要筛选的指标。
-                - None / "all" → 全部 13 项
+                - None / "all" → 全部 10 项
                 - "总体CPI"    → 只返回总体居民消费价格指数
                 - "居住"       → 按名称模糊匹配（含"居住"的指标）
                 - ["居住","教育"] → 多个模糊匹配（取并集）
                 - UUID 字符串   → 精确匹配 indicator_uuid
-            group: 分组名，如 "全部CPI(13项)"、"核心CPI(8项)"。
+            group: 分组名，如 "总CPI"、"八大标准分项"、"核心CPI"。
                 与 indicators 互斥，同时传时 group 优先。
             period: 时间段（同 CPISource 的 period 参数）。
                 - None         → 使用缓存中的全部时间段（默认最近 12 个月）
@@ -164,8 +164,8 @@ class CPIManager:
 
     def get_core_cpi(self, period: str | None = None,
                      force_update: bool = False) -> list[DataPoint]:
-        """快捷获取核心 CPI（8 项）"""
-        return self.get_by_group("核心CPI(8项)", period=period,
+        """快捷获取核心 CPI（不包括食品和能源）"""
+        return self.get_by_group("核心CPI", period=period,
                                  force_update=force_update)
 
     # ── 缓存管理（委托给 CPIStore）────────────────────
