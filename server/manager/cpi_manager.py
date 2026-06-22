@@ -37,6 +37,8 @@ from crawler.base import DataPoint
 from crawler.sources.cpi_source import (
     CPISource,
     CPI_GROUPS,
+    CID_PERIODS,
+    CPI_UUID_INDICATORS,
 )
 from storage.cpi_store import CPIStore
 
@@ -361,6 +363,227 @@ class CPIManager:
 
         # 检查区间的首尾月份是否都有数据
         return start_key in cached_dates and end_key in cached_dates
+
+    # ── 增长率辅助：扩展查询范围 ──────────────────
+
+    @staticmethod
+    def _expand_period_for_growth(period: str, months_back: int = 12) -> str:
+        """
+        将 period 向前扩展 months_back 个月，用于同比增长计算。
+
+        例如：
+          "202406-202605" → "202306-202605"（向前扩展 12 个月）
+          "2026"          → "2025-2026"
+          "202605"        → "202405-202605"
+
+        Args:
+            period: 原始时间段
+            months_back: 向前扩展的月数，默认 12
+
+        Returns:
+            扩展后的时间段字符串
+        """
+        from crawler.sources.cpi_source import _period_to_dts
+
+        if not period:
+            return period
+
+        dts = _period_to_dts(period)
+        if not dts:
+            return period
+
+        dt_range = dts[0]
+        if "-" in dt_range:
+            parts = dt_range.split("-")
+            start_code = parts[0].replace("MM", "")
+            end_code = parts[1].replace("MM", "")
+        else:
+            start_code = dt_range.replace("MM", "")
+            end_code = start_code
+
+        # 向前推 months_back 个月
+        start_year = int(start_code[:4])
+        start_month = int(start_code[4:6])
+        start_month -= months_back
+        while start_month <= 0:
+            start_year -= 1
+            start_month += 12
+        new_start = f"{start_year:04d}{start_month:02d}"
+
+        # 分别用扩展后的起始和原始结束构建范围
+        expanded = f"{new_start}-{end_code}"
+        return expanded
+
+    def get_cpi_with_buffer(
+        self,
+        period: str | None = None,
+        indicators: str | list[str] | None = None,
+        group: str | None = None,
+        buffer_months: int = 12,
+    ) -> tuple[list[DataPoint], str]:
+        """
+        获取 CPI 数据并附带额外的缓冲月份（用于增长率计算）。
+
+        返回 (扩展后的完整数据, 原始period)，调用方可以用原始 period
+        过滤增长结果，只保留目标范围内的数据。
+
+        Args:
+            period: 目标时间段
+            indicators: 指标筛选
+            group: 分组筛选
+            buffer_months: 缓冲月数，默认 12（同比需要前 12 个月）
+
+        Returns:
+            (data_with_buffer, original_period)
+        """
+        if not period:
+            return self.get_cpi(indicators=indicators, group=group), period
+
+        expanded_period = self._expand_period_for_growth(period, buffer_months)
+        data = self.get_cpi(indicators=indicators, group=group, period=expanded_period)
+        return data, period
+
+    # ── 数据完整性检查 ──────────────────────────────
+
+    def check_completeness(self) -> dict:
+        """
+        检查 CPI 数据完整性（2000-01 ~ 最新月份）。
+
+        验证每个月份是否都有对应周期的所有预期指标，
+        检查数据连续性，统计各周期的完成度。
+
+        Returns:
+            {
+                "total_expected_months": int,
+                "total_records": int,
+                "months_with_data": int,
+                "months_ok": int,
+                "months_missing_count": int,
+                "months_incomplete_count": int,
+                "months_missing": [str],
+                "months_incomplete": [str],
+                "gaps": [str],
+                "by_period": { "2000-2015": {"total": 192, "ok": 180, "pct": 93.8}, ... },
+                "period_indicator_names": { "2000-2015": ["居民消费价格指数", ...], ... },
+                "all_ok": bool,
+            }
+        """
+        from collections import defaultdict
+
+        self._load_cache()
+        if not self._all_data:
+            return {"total_records": 0, "all_ok": False, "error": "缓存中没有数据"}
+
+        data_dicts = [d.to_dict() for d in self._all_data]
+
+        # 获取数据的时间范围
+        all_dates = sorted({d.date for d in self._all_data if d.date})
+        if not all_dates:
+            return {"total_records": len(data_dicts), "all_ok": False, "error": "无日期信息"}
+
+        start_year = int(all_dates[0][:4])
+        start_month = int(all_dates[0][5:7])
+        end_year = int(all_dates[-1][:4])
+        end_month = int(all_dates[-1][5:7])
+
+        # 按月份分组
+        by_month: dict[str, list[dict]] = defaultdict(list)
+        for item in data_dicts:
+            by_month[item["date"]].append(item)
+
+        # 生成所有预期月份
+        all_expected_months = []
+        year = start_year
+        month = start_month
+        while year < end_year or (year == end_year and month <= end_month):
+            all_expected_months.append(f"{year:04d}-{month:02d}")
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+
+        # 周期指标注册表
+        period_indicator_names = {}
+        for period in CID_PERIODS:
+            names = []
+            for uuid in period["indicator_ids"]:
+                name = CPI_UUID_INDICATORS.get(uuid, uuid)
+                names.append(name)
+            period_indicator_names[period["label"]] = names
+
+        def get_expected_indicators(y: int) -> list[str]:
+            for p in CID_PERIODS:
+                if p["years"][0] <= y <= p["years"][1]:
+                    return list(p["indicator_ids"])
+            return []
+
+        # 按周期分组月份
+        by_period: dict[str, list[str]] = defaultdict(list)
+        for ym in all_expected_months:
+            y = int(ym[:4])
+            for p in CID_PERIODS:
+                if p["years"][0] <= y <= p["years"][1]:
+                    by_period[p["label"]].append(ym)
+                    break
+
+        # 检查每个月份
+        months_missing = []
+        months_incomplete = []
+        months_ok = []
+
+        for ym in all_expected_months:
+            y = int(ym[:4])
+            expected_indicators = get_expected_indicators(y)
+            expected_count = len(expected_indicators)
+
+            records = by_month.get(ym, [])
+            actual_count = len(records)
+
+            if actual_count == 0:
+                months_missing.append(ym)
+            elif actual_count < expected_count:
+                months_incomplete.append(ym)
+            else:
+                months_ok.append(ym)
+
+        # 数据连续性检查
+        gaps = []
+        prev_month_num = None
+        for ym in all_expected_months:
+            y = int(ym[:4])
+            m = int(ym[5:7])
+            month_num = y * 12 + m
+            if ym in by_month and len(by_month[ym]) > 0:
+                if prev_month_num is not None and month_num - prev_month_num > 1:
+                    gaps.append(ym)
+                prev_month_num = month_num
+
+        # 周期完成度
+        period_stats = {}
+        for label, pmonths in by_period.items():
+            total = len(pmonths)
+            ok_count = sum(1 for ym in pmonths if ym in months_ok)
+            pct = round(ok_count / total * 100, 1) if total > 0 else 0
+            period_stats[label] = {
+                "total": total,
+                "ok": ok_count,
+                "pct": pct,
+            }
+
+        return {
+            "total_expected_months": len(all_expected_months),
+            "total_records": len(data_dicts),
+            "months_with_data": len(months_ok) + len(months_incomplete),
+            "months_ok": len(months_ok),
+            "months_missing_count": len(months_missing),
+            "months_incomplete_count": len(months_incomplete),
+            "months_missing": months_missing,
+            "months_incomplete": months_incomplete,
+            "gaps": gaps,
+            "by_period": period_stats,
+            "period_indicator_names": period_indicator_names,
+            "all_ok": len(months_missing) == 0 and len(months_incomplete) == 0 and len(gaps) == 0,
+        }
 
     # ── 注册表校验 ──────────────────────────────
 

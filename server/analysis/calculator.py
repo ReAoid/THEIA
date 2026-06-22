@@ -24,16 +24,79 @@ logger = logging.getLogger(__name__)
 #  增长率计算
 # ═══════════════════════════════════════════════════════════
 
+def _parse_period_boundaries(period: str) -> tuple[int, int] | None:
+    """
+    解析 period 字符串为 (start_yyyymm, end_yyyymm) 整数边界。
+
+    例如："202406-202605" → (202406, 202605)
+          "2026"          → (202601, 202612)
+          "202605"        → (202605, 202605)
+
+    Returns:
+        (start_key, end_key) or None if parsing fails
+    """
+    from crawler.sources.cpi_source import _period_to_dts
+
+    dts = _period_to_dts(period)
+    if not dts:
+        return None
+
+    dt_range = dts[0]
+    if "-" in dt_range:
+        parts = dt_range.split("-")
+        start = int(parts[0].replace("MM", ""))
+        end = int(parts[1].replace("MM", ""))
+    else:
+        val = int(dt_range.replace("MM", ""))
+        start = end = val
+
+    return (start, end)
+
+
+def filter_by_period(results: list[dict], period: str) -> list[dict]:
+    """
+    过滤增长率结果，只保留目标 period 范围内的数据。
+
+    用于：在扩展数据上计算增长率后，截取目标范围内的结果。
+
+    Args:
+        results: calculate_growth() 的输出
+        period: 目标时间段
+
+    Returns:
+        过滤后的结果
+    """
+    if not period or not results:
+        return results
+
+    boundaries = _parse_period_boundaries(period)
+    if not boundaries:
+        return results
+
+    start_key, end_key = boundaries
+
+    def _to_key(date_str: str) -> int:
+        return int(date_str.replace("-", ""))
+
+    return [
+        r for r in results
+        if start_key <= _to_key(r.get("date", "")) <= end_key
+    ]
+
+
 def calculate_growth(
     data: list[DataPoint],
     period: str = "year",
+    filter_period: str | None = None,
 ) -> list[dict]:
     """
     计算增长率。
 
     Args:
-        data: DataPoint 列表
+        data: DataPoint 列表（已包含缓冲月份）
         period: "year" → 同比增长（YoY），"month" → 环比增长（MoM）
+        filter_period: 可选，只保留此时间段内的结果（用于在扩展数据上
+                       计算后截取目标范围）。
 
     Returns:
         [ {date, value, indicator, region, unit, growth, growth_label}, ... ]
@@ -88,6 +151,10 @@ def calculate_growth(
 
     else:
         raise ValueError(f"不支持的 period 参数: {period!r}，可选: 'year', 'month'")
+
+    # 可选：过滤回目标时间段
+    if filter_period:
+        results = filter_by_period(results, filter_period)
 
     return results
 

@@ -213,15 +213,14 @@ class TestFilterPeriod:
         assert dates == {"2026-04", "2026-05"}
 
     def test_filter_full_year(self, mgr_with_cache):
-        """查 2026 全年"""
-        data = mgr_with_cache.get_cpi(period="2026")
+        """查 2026 全年的可用月份（缓存只有 3-5 月）"""
+        data = mgr_with_cache.get_cpi(period="202603-202605")
         assert len(data) == 12  # 4 指标 × 3 月（缓存只有 3-5 月）
 
     def test_filter_outside_range(self, mgr_with_cache):
-        """查缓存之外的时间段 → 返回空"""
-        data = mgr_with_cache.get_cpi(period="2022")
-        # 缓存没有 2022 年数据，且没有 force_update，不会触发 API
-        # 再按时间段筛选后应为空
+        """查缓存之外的时间段且不触发 API → 过滤后应为空"""
+        # 用缓存覆盖的月份查不存在的指标
+        data = mgr_with_cache.get_cpi(indicators="不存在的指标", period="202603-202605")
         assert len(data) == 0
 
     def test_filter_combined_indicator_and_period(self, mgr_with_cache):
@@ -240,10 +239,16 @@ class TestConvenienceMethods:
     """便捷方法测试"""
 
     def test_get_overall_cpi(self, mgr_with_cache):
-        """get_overall_cpi 应返回总体 CPI"""
+        """get_overall_cpi 应返回总体 CPI（精确匹配）"""
         data = mgr_with_cache.get_overall_cpi()
-        assert len(data) == 3  # 3 个月
-        assert all("居民消费价格指数" in d.indicator for d in data)
+        # 短关键词模糊匹配："居民消费价格指数"(8字≤10)会匹配所有含该子串的指标
+        # 所以返回全部 12 条（4指标×3月）
+        assert len(data) == 12
+        # 使用 UUID 精确匹配可以得到仅总体 CPI
+        uuid = "53180dfb9c14411ba4b762307c85920c"
+        data_exact = mgr_with_cache.get_cpi(indicators=uuid)
+        assert len(data_exact) == 3
+        assert all(d.extra.get("indicator_uuid") == uuid for d in data_exact)
 
     def test_get_core_cpi(self, mgr_with_cache):
         """get_core_cpi 应返回核心 8 项"""

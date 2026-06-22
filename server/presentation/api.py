@@ -235,27 +235,45 @@ def growth():
     """
     增长率数据。
 
-    GET /api/v1/cpi/growth?indicator=居民消费价格指数&period=year
-         &period=202601-202605
+    GET /api/v1/cpi/growth?indicator=居民消费价格指数&period=202601-202605
 
     Query:
-        period: "year"（同比, 默认）或 "month"（环比）
+        growth_period: "year"（同比, 默认）或 "month"（环比）
+
+    注意：同比计算会自动额外加载前 12 个月的数据作为缓冲，
+         确保目标范围内每个月份都能算出同比增长。
     """
     try:
         params = _parse_params()
         growth_period = request.args.get("growth_period", "year")
+        original_period = params.get("period")
 
-        data = _get_data(
-            indicators=params["indicators"],
-            period=params.get("period"),
-            group=params["group"],
-            force_update=params["force_update"],
-        )
+        mgr = get_manager()
+
+        if growth_period == "year" and original_period:
+            # 同比计算：自动扩展 12 个月缓冲，获取足够的前期数据
+            data, _ = mgr.get_cpi_with_buffer(
+                period=original_period,
+                indicators=params["indicators"],
+                group=params["group"],
+                buffer_months=12,
+            )
+        else:
+            data = _get_data(
+                indicators=params["indicators"],
+                period=original_period,
+                group=params["group"],
+                force_update=params["force_update"],
+            )
 
         if not data:
             return _error("无匹配数据", 404)
 
-        growth_data = calculate_growth(data, period=growth_period)
+        growth_data = calculate_growth(
+            data,
+            period=growth_period,
+            filter_period=original_period if growth_period == "year" else None,
+        )
 
         return jsonify({
             "success": True,
@@ -310,24 +328,44 @@ def chart():
 
     Query:
         type: "line"（折线图, 默认）或 "growth"（增长率图）
+        growth_period: "year"（同比, 默认）或 "month"（环比）
+
+    注意：增长率图会自动加载前 12 个月数据作为缓冲，
+         确保图表完整显示。
     """
     try:
         params = _parse_params()
         chart_type = request.args.get("type", "line")
         growth_period = request.args.get("growth_period", "year")
+        original_period = params.get("period")
 
-        data = _get_data(
-            indicators=params["indicators"],
-            period=params["period"],
-            group=params["group"],
-            force_update=params["force_update"],
-        )
+        mgr = get_manager()
+
+        if chart_type == "growth" and original_period:
+            # 增长率图表：自动扩展 12 个月缓冲
+            data, _ = mgr.get_cpi_with_buffer(
+                period=original_period,
+                indicators=params["indicators"],
+                group=params["group"],
+                buffer_months=12,
+            )
+        else:
+            data = _get_data(
+                indicators=params["indicators"],
+                period=original_period,
+                group=params["group"],
+                force_update=params["force_update"],
+            )
 
         if not data:
             return _error("无匹配数据", 404)
 
         if chart_type == "growth":
-            growth_data = calculate_growth(data, period=growth_period)
+            growth_data = calculate_growth(
+                data,
+                period=growth_period,
+                filter_period=original_period if growth_period == "year" else None,
+            )
             chart_data = prepare_growth_chart_data(growth_data, params["indicators"])
         else:
             chart_data = prepare_chart_data(data, params["indicators"])
@@ -374,6 +412,27 @@ def groups():
 
     except Exception as e:
         logger.exception("groups 异常")
+        return _error(str(e), 500)
+
+
+@api_bp.route("/completeness", methods=["GET"])
+def completeness():
+    """
+    数据完整性检查。
+
+    GET /api/v1/cpi/completeness
+
+    返回 2000-01 到最新月份的数据完整性报告。
+    """
+    try:
+        mgr = get_manager()
+        result = mgr.check_completeness()
+        return jsonify({
+            "success": True,
+            "data": result,
+        })
+    except Exception as e:
+        logger.exception("completeness 异常")
         return _error(str(e), 500)
 
 
