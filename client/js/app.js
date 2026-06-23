@@ -573,12 +573,23 @@ function mergeLatest(items) {
  */
 function mergeSummaryDetails(details) {
   const merged = {};
-  const order = [];
+  // 收集所有短名
+  const shortNameSet = new Set();
+  for (const [fullName, info] of Object.entries(details)) {
+    const shortName = normName(fullName);
+    shortNameSet.add(shortName);
+  }
+  // 按标准顺序排序（优先用 shortNameSet 中存在的短名，按 INDICATOR_ORDER_SHORT 顺序排列）
+  const order = INDICATOR_ORDER_SHORT.filter(n => shortNameSet.has(n));
+  // 上述未覆盖的指标追加到末尾
+  for (const sn of shortNameSet) {
+    if (!order.includes(sn)) order.push(sn);
+  }
+
   for (const [fullName, info] of Object.entries(details)) {
     const shortName = normName(fullName);
     if (!merged[shortName]) {
       merged[shortName] = { ...info, _count: 1 };
-      order.push(shortName);
     } else {
       // 合并统计：取范围更大的
       const existing = merged[shortName];
@@ -667,6 +678,7 @@ const INDICATOR_TOOLTIPS = {
 
 /* ── 指标排序（总CPI → 核心CPI → 八大标准分项） ──── */
 
+/** 全名顺序（2026-2030 周期） */
 const INDICATOR_ORDER = [
   '居民消费价格指数 (上年同月=100)',
   '不包括食品和能源居民消费价格指数 (上年同月=100)',
@@ -680,6 +692,7 @@ const INDICATOR_ORDER = [
   '其他用品及服务类居民消费价格指数 (上年同月=100)',
 ];
 
+/** 全名顺序（2021-2025 周期） */
 const INDICATOR_ORDER_2021 = [
   '居民消费价格指数(上年同月=100)',
   '不包括食品和能源居民消费价格指数 (上年同月=100)',
@@ -694,6 +707,53 @@ const INDICATOR_ORDER_2021 = [
 ];
 
 /**
+ * 短名顺序（与 CPI_NAME_MAP 归一化后的结果对应）
+ *
+ * 经过 mergeDatasets/mergeLatest/mergeSummaryDetails 等函数
+ * 归一化后，指标名称变为短名（如 '总 CPI'、'核心 CPI'、'居住'）。
+ * 此数组用于在这些场景下保持正确的排序。
+ */
+const INDICATOR_ORDER_SHORT = [
+  '总 CPI',
+  '核心 CPI',
+  '居住',
+  '食品烟酒',
+  '交通通信',
+  '教育文化',
+  '医疗保健',
+  '生活用品',
+  '衣着',
+  '其他',
+];
+
+/**
+ * 构建统一的指标排序映射表（合并全名 + 短名）
+ * @returns {Map<string, number>} 名称 → 排序索引的映射
+ */
+function buildIndicatorOrderMap() {
+  const map = new Map();
+  let idx = 0;
+
+  // 按顺序依次添加：总CPI → 核心CPI → 八大标准分项
+  for (let i = 0; i < INDICATOR_ORDER_SHORT.length; i++) {
+    const shortName = INDICATOR_ORDER_SHORT[i];
+    const fullName = INDICATOR_ORDER[i];
+    const fullName2021 = INDICATOR_ORDER_2021[i];
+
+    if (!map.has(shortName)) map.set(shortName, idx);
+    if (fullName && !map.has(fullName)) map.set(fullName, idx);
+    if (fullName2021 && !map.has(fullName2021)) map.set(fullName2021, idx);
+
+    idx++;
+  }
+
+  return map;
+}
+
+/** 全局排序映射（构建一次） */
+const _ORDER_MAP = buildIndicatorOrderMap();
+
+/**
  * 按预设顺序对 indicator 数组排序
  * @param {string[]} names - 指标名称数组
  * @param {string[]} items - 要排序的完整对象数组，每个对象有 .indicator 或 .name 属性
@@ -701,21 +761,28 @@ const INDICATOR_ORDER_2021 = [
  * @returns {Array} 排序后的新数组
  */
 function sortByIndicatorOrder(items, keyField = 'indicator') {
-  const orderMap = new Map();
-  // 合并两个周期的顺序
-  const allOrders = [...INDICATOR_ORDER, ...INDICATOR_ORDER_2021];
-  allOrders.forEach((name, i) => {
-    if (!orderMap.has(name)) orderMap.set(name, i);
-  });
-  // 也支持按简名匹配
   function getOrder(item) {
     const name = item[keyField] || '';
-    if (orderMap.has(name)) return orderMap.get(name);
-    // 模糊匹配：去掉括号内容
+    if (_ORDER_MAP.has(name)) return _ORDER_MAP.get(name);
+
+    // 降级匹配：去掉括号内容后匹配
     const stripped = name.replace(/\(.*?\)/g, '').trim();
-    for (const [key, idx] of orderMap) {
-      if (key.replace(/\(.*?\)/g, '').trim() === stripped) return idx;
+    if (_ORDER_MAP.has(stripped)) return _ORDER_MAP.get(stripped);
+
+    // 再降级：遍历 map 中每个 key 去掉括号后比较
+    for (const [key, rank] of _ORDER_MAP) {
+      if (key.replace(/\(.*?\)/g, '').trim() === stripped) return rank;
     }
+
+    // 再降级：用 CPI_NAME_MAP 反查短名后匹配
+    for (const [full, short] of Object.entries(CPI_NAME_MAP)) {
+      if (name === full) {
+        const shortRank = _ORDER_MAP.get(short);
+        if (shortRank !== undefined) return shortRank;
+        break;
+      }
+    }
+
     return 999;
   }
   return [...items].sort((a, b) => getOrder(a) - getOrder(b));
@@ -1152,7 +1219,8 @@ function initFloatingTooltip() {
 
   // ⓘ 上 mouseenter → 显示
   document.addEventListener('mouseenter', (e) => {
-    const icon = e.target.closest('.tooltip-icon');
+    const target = e.target;
+    const icon = target instanceof Element ? target.closest('.tooltip-icon') : null;
     if (!icon || icon === activeIcon) return;
     activeIcon = icon;
 
@@ -1176,7 +1244,8 @@ function initFloatingTooltip() {
 
   // ⓘ 上 mouseleave → 隐藏
   document.addEventListener('mouseleave', (e) => {
-    const icon = e.target.closest('.tooltip-icon');
+    const target = e.target;
+    const icon = target instanceof Element ? target.closest('.tooltip-icon') : null;
     if (icon && icon === activeIcon) {
       activeIcon = null;
       tooltipEl.style.display = 'none';
