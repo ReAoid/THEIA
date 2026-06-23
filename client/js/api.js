@@ -66,14 +66,6 @@ export async function fetchData(params = {}) {
 }
 
 /**
- * 获取统计摘要
- * GET /api/v1/cpi/summary
- */
-export async function fetchSummary(params = {}) {
-  return apiRequest(`/summary${qs(params)}`);
-}
-
-/**
  * 获取图表数据
  * GET /api/v1/cpi/chart
  */

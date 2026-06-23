@@ -8,7 +8,6 @@ import {
   fetchOverview,
   fetchIndicators,
   fetchData,
-  fetchSummary,
   fetchChart,
   fetchGroups,
 } from '/js/api.js';
@@ -25,12 +24,8 @@ const state = {
   selectedIndicator: '',
   selectedGroup: '',
   selectedPeriod: '202406-202605',
-  currentPage: 1,
-  pageSize: 20,
   allData: [],
   chartType: 'line',
-  sortKey: null,
-  sortAsc: true,
   currentSection: 'cpi',
   // 图表多选指标（默认全部）
   chartSelectedIndicators: [],        // 选中的 indicator name 列表
@@ -46,11 +41,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 const refreshBtn = $('#refresh-btn');
 const overviewGrid = $('#overview-grid');
-const tableBody = $('#table-body');
-const tableCount = $('#table-count');
-const pagePrev = $('#page-prev');
-const pageNext = $('#page-next');
-const pageInfo = $('#page-info');
+
 const mainChart = $('#mainChart');
 const chartTabs = $$('.chart-tab');
 const sidebarToggle = $('#sidebar-toggle');
@@ -110,7 +101,6 @@ async function loadIndicators() {
 async function refreshAll() {
   // 显示加载状态
   overviewGrid.innerHTML = '<div class="loading">🔄 加载中...</div>';
-  tableBody.innerHTML = '<tr><td colspan="5" class="loading-cell">🔄 加载中...</td></tr>';
 
   const currentPeriod = getCurrentPeriod();
   const params = { period: currentPeriod };
@@ -127,22 +117,18 @@ async function refreshAll() {
   if (state.selectedGroup) chartParams.group = state.selectedGroup;
 
   try {
-    const [overviewRes, dataRes, chartRes, summaryRes] = await Promise.all([
+    const [overviewRes, dataRes, chartRes] = await Promise.all([
       fetchOverview(params).catch(() => null),
       fetchData(params).catch(() => null),
       fetchChart(chartParams).catch(() => null),
-      fetchSummary(params).catch(() => null),
     ]);
 
     renderOverview(overviewRes);
     renderKpiCards(overviewRes);
 
     state.allData = (dataRes && dataRes.data) || [];
-    state.currentPage = 1;
-    renderTable();
 
     renderChart(chartRes);
-    renderSummary(summaryRes);
 
     // 更新时间戳
     lastUpdate.textContent = `已更新 ${formatTime(new Date())}`;
@@ -150,7 +136,6 @@ async function refreshAll() {
   } catch (e) {
     console.error('刷新数据失败:', e);
     overviewGrid.innerHTML = `<div class="loading">❌ 加载失败: ${e.message}</div>`;
-    tableBody.innerHTML = `<tr><td colspan="5" class="loading-cell">❌ 加载失败: ${e.message}</td></tr>`;
   }
 }
 
@@ -281,63 +266,7 @@ function renderOverview(res) {
   overviewGrid.innerHTML = html;
 }
 
-function renderTable() {
-  const data = state.allData;
-  tableCount.textContent = `${data.length} 条`;
 
-  if (!data.length) {
-    tableBody.innerHTML = '<tr><td colspan="5" class="loading-cell">📭 暂无数据</td></tr>';
-    updatePagination(0);
-    return;
-  }
-
-  let sorted = [...data];
-  if (state.sortKey) {
-    sorted.sort((a, b) => {
-      const va = a[state.sortKey] ?? '';
-      const vb = b[state.sortKey] ?? '';
-      if (typeof va === 'number' && typeof vb === 'number') {
-        return state.sortAsc ? va - vb : vb - va;
-      }
-      return state.sortAsc
-        ? String(va).localeCompare(String(vb))
-        : String(vb).localeCompare(String(va));
-    });
-  }
-
-  const total = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
-  if (state.currentPage > totalPages) state.currentPage = totalPages;
-  const start = (state.currentPage - 1) * state.pageSize;
-  const pageData = sorted.slice(start, start + state.pageSize);
-
-  let html = '';
-  for (const row of pageData) {
-    const displayVal = cpiToGrowth(row.value);
-    const val = displayVal !== null
-      ? (displayVal >= 0 ? '+' : '') + displayVal.toFixed(2)
-      : 'N/A';
-    const shortName = normName(row.indicator || '');
-    html += `
-      <tr>
-        <td>${escapeHtml(row.date || '')}</td>
-        <td title="${escapeHtml(row.indicator || '')}">${escapeHtml(shortName)}</td>
-        <td>${val}</td>
-        <td>${escapeHtml(row.unit || '')}</td>
-        <td>${escapeHtml(row.region || '')}</td>
-      </tr>
-    `;
-  }
-
-  tableBody.innerHTML = html;
-  updatePagination(totalPages);
-}
-
-function updatePagination(totalPages) {
-  pageInfo.textContent = `第 ${state.currentPage} / ${totalPages} 页`;
-  pagePrev.disabled = state.currentPage <= 1;
-  pageNext.disabled = state.currentPage >= totalPages;
-}
 
 function renderChart(res) {
   const chartData = res && res.data;
@@ -368,52 +297,7 @@ function renderChart(res) {
   renderLineChart(mainChart, transformedData);
 }
 
-function renderSummary(res) {
-  if (!res || !res.data || !res.data.details) {
-    document.getElementById('summary-grid').innerHTML = '<div class="loading">📭 无摘要数据</div>';
-    return;
-  }
 
-  const details = res.data.details;
-  // 合并同名指标（如食品烟酒跨周期两个名称）
-  const { merged, order } = mergeSummaryDetails(details);
-  let html = '';
-
-  for (const name of order) {
-    const info = merged[name];
-    const trendIcon = info.trend === 'up' ? '📈' : info.trend === 'down' ? '📉' : '➡️';
-    const latestVal = info.latest ? _fmtGrowth(info.latest.value) : 'N/A';
-    const latestDate = info.latest ? info.latest.date : '';
-    const meanVal = info.mean !== undefined ? _fmtGrowth(info.mean) : '--';
-    const maxVal = info.max ? _fmtGrowth(info.max.value) : '--';
-    const minVal = info.min ? _fmtGrowth(info.min.value) : '--';
-    const volVal = info.volatility !== undefined ? info.volatility.toFixed(2) : '--';
-    const stdVal = info.std !== undefined ? info.std.toFixed(2) : '--';
-
-    function _fmtGrowth(v) {
-      if (v === null || v === undefined) return '--';
-      const g = cpiToGrowth(v);
-      return (g >= 0 ? '+' : '') + g.toFixed(2);
-    }
-
-    html += `
-      <div class="summary-card">
-        <div class="indicator-name">${trendIcon} ${escapeHtml(name)}</div>
-        <div class="value">${latestVal}</div>
-        <div class="meta">${latestDate}</div>
-        <div class="stats-list">
-          <div class="stat-row"><span class="stat-label">均值</span><span class="stat-val">${meanVal}</span></div>
-          <div class="stat-row"><span class="stat-label">最高</span><span class="stat-val">${maxVal}</span></div>
-          <div class="stat-row"><span class="stat-label">最低</span><span class="stat-val">${minVal}</span></div>
-          <div class="stat-row"><span class="stat-label">波动</span><span class="stat-val">${volVal}</span></div>
-          <div class="stat-row"><span class="stat-label">标准差</span><span class="stat-val">${stdVal}</span></div>
-        </div>
-      </div>
-    `;
-  }
-
-  document.getElementById('summary-grid').innerHTML = html;
-}
 
 /* ══════════════════════════════════════════════════════
    页面切换
@@ -568,68 +452,7 @@ function mergeLatest(items) {
   return Object.values(groups);
 }
 
-/**
- * 对 summary details 按归一化名称合并统计值。
- */
-function mergeSummaryDetails(details) {
-  const merged = {};
-  // 收集所有短名
-  const shortNameSet = new Set();
-  for (const [fullName, info] of Object.entries(details)) {
-    const shortName = normName(fullName);
-    shortNameSet.add(shortName);
-  }
-  // 按标准顺序排序（优先用 shortNameSet 中存在的短名，按 INDICATOR_ORDER_SHORT 顺序排列）
-  const order = INDICATOR_ORDER_SHORT.filter(n => shortNameSet.has(n));
-  // 上述未覆盖的指标追加到末尾
-  for (const sn of shortNameSet) {
-    if (!order.includes(sn)) order.push(sn);
-  }
 
-  for (const [fullName, info] of Object.entries(details)) {
-    const shortName = normName(fullName);
-    if (!merged[shortName]) {
-      merged[shortName] = { ...info, _count: 1 };
-    } else {
-      // 合并统计：取范围更大的
-      const existing = merged[shortName];
-      existing._count++;
-      existing.count += info.count || 0;
-      // 日期范围取并集
-      const oldRange = existing.date_range || '';
-      const newRange = info.date_range || '';
-      if (newRange && oldRange) {
-        const oldStart = oldRange.split(' ~ ')[0];
-        const oldEnd = oldRange.split(' ~ ')[1];
-        const newStart = newRange.split(' ~ ')[0];
-        const newEnd = newRange.split(' ~ ')[1];
-        existing.date_range = `${oldStart < newStart ? oldStart : newStart} ~ ${oldEnd > newEnd ? oldEnd : newEnd}`;
-      } else if (newRange && !oldRange) {
-        existing.date_range = newRange;
-      }
-      // latest 取最新日期
-      if (info.latest && (!existing.latest || info.latest.date > existing.latest.date)) {
-        existing.latest = info.latest;
-      }
-      // 数值统计取合并后的
-      if (info.mean !== undefined) {
-        existing.mean = (existing.mean || 0) + info.mean;  // 简化处理，会偏
-      }
-      if (info.max && (!existing.max || info.max.value > existing.max.value)) {
-        existing.max = info.max;
-      }
-      if (info.min && (!existing.min || info.min.value < existing.min.value)) {
-        existing.min = info.min;
-      }
-      if (info.volatility !== undefined) {
-        const v1 = existing.volatility || 0;
-        const v2 = info.volatility || 0;
-        existing.volatility = Math.max(v1, v2);
-      }
-    }
-  }
-  return { merged, order };
-}
 
 /* ── 指标 Tooltip 说明 ──────────────────────────── */
 
@@ -849,43 +672,6 @@ function bindEvents() {
       periodPresetBtns.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       refreshAll();
-    });
-  });
-
-  // 分页
-  pagePrev.addEventListener('click', () => {
-    if (state.currentPage > 1) {
-      state.currentPage--;
-      renderTable();
-    }
-  });
-
-  pageNext.addEventListener('click', () => {
-    const totalPages = Math.max(1, Math.ceil(state.allData.length / state.pageSize));
-    if (state.currentPage < totalPages) {
-      state.currentPage++;
-      renderTable();
-    }
-  });
-
-  // 表头排序
-  document.querySelectorAll('#data-table th[data-sort]').forEach(th => {
-    th.addEventListener('click', () => {
-      const key = th.dataset.sort;
-      if (state.sortKey === key) {
-        state.sortAsc = !state.sortAsc;
-      } else {
-        state.sortKey = key;
-        state.sortAsc = true;
-      }
-
-      document.querySelectorAll('#data-table th[data-sort]').forEach(h => {
-        h.classList.remove('sort-asc', 'sort-desc');
-      });
-      th.classList.add(state.sortAsc ? 'sort-asc' : 'sort-desc');
-
-      state.currentPage = 1;
-      renderTable();
     });
   });
 

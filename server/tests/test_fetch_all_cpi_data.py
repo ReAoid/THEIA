@@ -14,7 +14,7 @@ cid 和 indicatorIds。
   # 完整拉取（需联网，预计 2-3 分钟）
   pytest tests/test_fetch_all_cpi_data.py -v --real
 
-  # 仅查看已缓存数据的统计摘要（不联网）
+  # 仅查看已缓存数据的摘要（不联网）
   pytest tests/test_fetch_all_cpi_data.py -v -k "test_summary"
 
   # 探索所有周期的指标名（从 API 自动发现）
@@ -209,14 +209,14 @@ class TestFetchAllCPI:
 
 
 # -----------------------------------------------------------
-#  仅统计摘要（不联网）
+#  仅数据摘要（不联网）
 # -----------------------------------------------------------
 
 class TestSummary:
     """查看已缓存的 CPI 数据摘要（不联网）。"""
 
     def test_summary(self):
-        """从缓存读取并展示统计摘要。"""
+        """从缓存读取并展示数据摘要。"""
         store = CPIStore()
         summary = store.get_summary()
         info = store.get_cache_info()

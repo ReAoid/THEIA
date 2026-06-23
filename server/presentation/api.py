@@ -10,7 +10,6 @@ CPI RESTful API Blueprint
   GET  /api/v1/cpi/overview       → 总体概览
   GET  /api/v1/cpi/indicators     → 指标列表
   GET  /api/v1/cpi/data           → 原始数据（带筛选）
-  GET  /api/v1/cpi/summary        → 统计摘要
   GET  /api/v1/cpi/chart          → 图表友好数据
   GET  /api/v1/cpi/groups         → 分组列表
 """
@@ -227,35 +226,7 @@ def get_data():
         return _error(str(e), 500)
 
 
-@api_bp.route("/summary", methods=["GET"])
-def summary():
-    """
-    统计摘要。
 
-    GET /api/v1/cpi/summary?indicator=居民消费价格指数&period=202601-202605
-    """
-    try:
-        params = _parse_params()
-        data = _get_data(
-            indicators=params["indicators"],
-            period=params["period"],
-            group=params["group"],
-            force_update=params["force_update"],
-        )
-
-        if not data:
-            return _error("无匹配数据", 404)
-
-        trend = analyze_trend(data)
-
-        return jsonify({
-            "success": True,
-            "data": trend,
-        })
-
-    except Exception as e:
-        logger.exception("summary 异常")
-        return _error(str(e), 500)
 
 
 @api_bp.route("/chart", methods=["GET"])
