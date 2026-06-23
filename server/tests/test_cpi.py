@@ -565,21 +565,13 @@ class TestValidateRegistry:
 # ═══════════════════════════════════════════════════════════
 
 class TestCPIAnalysis:
-    """测试同比/环比/摘要计算"""
+    """测试摘要计算"""
 
     def setup_method(self):
         self.data = [
             DataPoint(date="2022-01", value=100.0, indicator="CPI"),
             DataPoint(date="2022-02", value=101.0, indicator="CPI"),
             DataPoint(date="2022-03", value=102.0, indicator="CPI"),
-        ]
-
-        # 含跨年数据，用于测试同比
-        self.data_yoy = [
-            DataPoint(date="2021-01", value=99.0, indicator="CPI"),
-            DataPoint(date="2021-02", value=100.0, indicator="CPI"),
-            DataPoint(date="2022-01", value=103.0, indicator="CPI"),
-            DataPoint(date="2022-02", value=104.0, indicator="CPI"),
         ]
 
         # 多指标数据
@@ -611,41 +603,6 @@ class TestCPIAnalysis:
         assert s["indicators"] == 2
         assert "总体CPI" in s["details"]
         assert "食品CPI" in s["details"]
-
-    def test_calc_mom_single_indicator(self):
-        """环比：（2月 vs 1月）= (101/100-1)*100 = 1%"""
-        result = CPISource.calc_mom(self.data)
-        assert result[0]["mom"] is None  # 第一个无环比
-        assert result[1]["mom"] == 1.0
-        assert result[2]["mom"] == pytest.approx(0.99, rel=0.01)
-
-    def test_calc_mom_sorted_by_indicator_date(self):
-        """多指标确保环比只对比同指标"""
-        result = CPISource.calc_mom(self.data_multi)
-        # 按 (indicator, date) 排序："总"(U+603B) < "食"(U+98DF)
-        # 所以排序为：总体CPI(4月,5月), 食品CPI(4月,5月)
-        # 总体CPI 4月 → 无环比
-        assert result[0]["mom"] is None
-        # 总体CPI 5月 → (101.2/101.2-1)*100 = 0
-        assert result[1]["mom"] == 0.0
-        # 食品CPI 4月 → 无环比（前一个是总体CPI 5月，不同指标）
-        assert result[2]["mom"] is None
-        # 食品CPI 5月 → (99.1/99.2-1)*100 ≈ -0.1
-        assert result[3]["mom"] == pytest.approx(-0.1, rel=0.01)
-
-    def test_calc_yoy_single_indicator(self):
-        """同比：2022-01 vs 2021-01 = (103/99 - 1)*100 ≈ 4.04%"""
-        result = CPISource.calc_yoy(self.data_yoy)
-        assert result[0]["yoy"] is None  # 2021-01 无上年同期
-        assert result[1]["yoy"] is None
-        assert result[2]["yoy"] == pytest.approx(4.04, rel=0.01)
-        assert result[3]["yoy"] == 4.0  # (104/100 - 1)*100
-
-    def test_calc_yoy_empty(self):
-        assert CPISource.calc_yoy([]) == []
-
-    def test_calc_mom_empty(self):
-        assert CPISource.calc_mom([]) == []
 
 
 # ═══════════════════════════════════════════════════════════

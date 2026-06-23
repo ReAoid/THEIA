@@ -66,14 +66,6 @@ export async function fetchData(params = {}) {
 }
 
 /**
- * 获取增长率数据
- * GET /api/v1/cpi/growth
- */
-export async function fetchGrowth(params = {}) {
-  return apiRequest(`/growth${qs(params)}`);
-}
-
-/**
  * 获取统计摘要
  * GET /api/v1/cpi/summary
  */

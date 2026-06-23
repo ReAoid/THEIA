@@ -213,22 +213,81 @@ class CPIManager:
 
     def _fetch_from_api(self, period: str | None = None):
         """
-        从 API 拉取数据（仅拉取指定时间段）。
+        从 API 拉取数据（自动处理跨 CID 周期）。
+
+        如果 period 跨越多个 CID 周期，对每个周期分别发起 API 请求并合并。
 
         Args:
             period: 要拉取的时间段，None 则默认最近 12 个月。
         """
-        effective_period = period or "202406-202605"  # 默认最近 12 个月
+        from crawler.sources.cpi_source import (
+            _period_to_dts,
+            get_period_config_for_range,
+            CPISource,
+        )
 
-        # 用 CPISource 拉取全部 13 个指标
-        source = CPISource(period=effective_period)
-        logger.info(f"从 API 拉取 CPI 数据: {effective_period}")
-        raw_data = source.flow()
+        effective_period = period or "202406-202605"
 
-        if raw_data:
-            self._save_cache(raw_data)
+        # 解析起止年份
+        dts = _period_to_dts(effective_period)
+        if not dts:
+            logger.warning(f"无法解析 period: {effective_period}")
+            source = CPISource(period=effective_period)
+            raw_data = source.flow()
+            if raw_data:
+                self._save_cache(raw_data)
+            return
+
+        dt_range = dts[0]
+        if "-" in dt_range:
+            parts = dt_range.split("-")
+            start_code = parts[0].replace("MM", "")
+            end_code = parts[1].replace("MM", "")
         else:
-            logger.warning("API 未返回数据")
+            start_code = dt_range.replace("MM", "")
+            end_code = start_code
+
+        start_year = int(start_code[:4]) if start_code.isdigit() else None
+        end_year = int(end_code[:4]) if end_code.isdigit() else None
+        if start_year is None or end_year is None:
+            source = CPISource(period=effective_period)
+            raw_data = source.flow()
+            if raw_data:
+                self._save_cache(raw_data)
+            return
+
+        # 找出所有涉及的 CID 周期
+        period_configs = get_period_config_for_range(start_year, end_year)
+
+        if not period_configs:
+            source = CPISource(period=effective_period)
+            raw_data = source.flow()
+            if raw_data:
+                self._save_cache(raw_data)
+            return
+
+        all_data: list[DataPoint] = []
+
+        for cfg in period_configs:
+            logger.info(f"拉取 {cfg['label']} 周期数据")
+            try:
+                source = CPISource(
+                    period=effective_period,
+                    indicator_ids=list(cfg["indicator_ids"]),
+                    cid=cfg["cid"],
+                    root_id=cfg.get("root_id"),
+                )
+                raw_data = source.flow()
+                if raw_data:
+                    all_data.extend(raw_data)
+                    logger.info(f"  → {len(raw_data)} 条")
+            except Exception as e:
+                logger.error(f"拉取 {cfg['label']} 失败: {e}")
+
+        if all_data:
+            self._save_cache(all_data)
+        else:
+            logger.warning("API 未返回任何数据")
 
     # ── 内部：筛选 ────────────────────────────────────
 
@@ -246,44 +305,102 @@ class CPIManager:
           - UUID 精确匹配（匹配 extra.indicator_uuid）
           - 中文名精确匹配
           - 中文名模糊匹配（子串包含）
+
+        自动处理跨周期同义指标：查询任一周期名称/UUID，
+        会自动包含其他周期的同名指标。
         """
         if isinstance(indicators, str):
             indicators = [indicators]
 
-        # 构建筛选条件（全转小写以便大小写不敏感匹配）
-        conditions = []
+        from crawler.sources.cpi_source import CPI_CROSS_PERIOD_ALIASES, CPI_UUID_INDICATORS
+
+        # ── 名称 → UUID 查找 ──
+        # 用列表而不是字典，避免归一化后 key 碰撞覆盖
+        def _norm(name: str) -> str:
+            return name.replace(" ", "").replace("(", "").replace(")", "").lower()
+
+        uuid_entries: list[tuple[str, str]] = [
+            (name, uuid) for uuid, name in CPI_UUID_INDICATORS.items()
+        ]
+
+        # ── 收集所有目标 UUID（含别名展开） ──
+        target_uuids: set[str] = set()
+
         for ind in indicators:
             ind = ind.strip()
             if not ind:
                 continue
 
-            # 判断是否是 UUID（32位hex + 4个连字符 = 36字符，或纯32位）
+            # 判断是不是 UUID
             cleaned = ind.replace("-", "")
-            if len(cleaned) == 32 and all(c in "0123456789abcdefABCDEF" for c in cleaned):
-                conditions.append(("uuid", ind))
-            else:
-                conditions.append(("name", ind.lower()))
+            is_uuid = len(cleaned) == 32 and all(c in "0123456789abcdefABCDEF" for c in cleaned)
 
+            if is_uuid:
+                target_uuids.add(ind.lower())
+            else:
+                norm_input = _norm(ind)
+                # 逐个匹配，精确匹配优先
+                for raw_name, uuid in uuid_entries:
+                    if _norm(raw_name) == norm_input:
+                        target_uuids.add(uuid.lower())
+                # 短关键词子串匹配
+                if len(ind) <= 10:
+                    for raw_name, uuid in uuid_entries:
+                        if norm_input in _norm(raw_name):
+                            target_uuids.add(uuid.lower())
+
+        # ── 跨周期别名展开 ──
+        def _expand(uuids: set[str]) -> set[str]:
+            result_set = set(uuids)
+            for u in list(uuids):
+                # 正向：新 UUID → 旧 UUID
+                for alias in CPI_CROSS_PERIOD_ALIASES.get(u, []):
+                    result_set.add(alias.lower())
+                # 反向：旧 UUID → 新 UUID
+                for new_uuid, old_uuids in CPI_CROSS_PERIOD_ALIASES.items():
+                    if any(u == o.lower() for o in old_uuids):
+                        result_set.add(new_uuid.lower())
+                        for alias in CPI_CROSS_PERIOD_ALIASES.get(new_uuid, []):
+                            result_set.add(alias.lower())
+            return result_set
+
+        all_target_uuids = _expand(target_uuids)
+
+        # ── 执行筛选：匹配 UUID 或名称 ──
         result = []
         for d in data:
-            for cond_type, cond_val in conditions:
-                if cond_type == "uuid":
-                    if d.extra.get("indicator_uuid", "").lower() == cond_val.lower():
-                        result.append(d)
-                        break
-                    # 也匹配 _id
-                    if d.extra.get("_id", "").lower() == cond_val.lower():
-                        result.append(d)
-                        break
-                elif cond_type == "name":
-                    d_name = d.indicator.lower()
+            d_uuid = d.extra.get("indicator_uuid", "").lower()
+            d_id = d.extra.get("_id", "").lower()
+
+            # UUID 匹配（含别名展开后的）
+            if d_uuid in all_target_uuids or d_id in all_target_uuids:
+                result.append(d)
+                continue
+
+            # 名称匹配
+            if not target_uuids:
+                # 如果用户传的是名称，也用名称匹配
+                d_name = d.indicator.lower()
+                for ind in indicators:
+                    ind = ind.strip()
+                    if not ind:
+                        continue
                     # 精确匹配
-                    if d_name == cond_val:
+                    if d_name == ind.lower():
                         result.append(d)
                         break
-                    # 短关键词（≤10字符）做模糊匹配（子串包含），
-                    # 避免长名称如"居民消费价格指数"误匹配"居住类居民消费价格指数"
-                    if len(cond_val) <= 10 and cond_val in d_name:
+                    # 短关键词模糊匹配
+                    if len(ind) <= 10 and ind.lower() in d_name:
+                        result.append(d)
+                        break
+                    # 标准化后匹配（去空格、去括号）
+                    if _norm(d_name) == _norm(ind):
+                        result.append(d)
+                        break
+                    # 标准化后子串匹配
+                    norm_input = _norm(ind)
+                    norm_dname = _norm(d_name)
+                    if len(norm_input) <= 10 and norm_input in norm_dname:
                         result.append(d)
                         break
 
@@ -363,85 +480,6 @@ class CPIManager:
 
         # 检查区间的首尾月份是否都有数据
         return start_key in cached_dates and end_key in cached_dates
-
-    # ── 增长率辅助：扩展查询范围 ──────────────────
-
-    @staticmethod
-    def _expand_period_for_growth(period: str, months_back: int = 12) -> str:
-        """
-        将 period 向前扩展 months_back 个月，用于同比增长计算。
-
-        例如：
-          "202406-202605" → "202306-202605"（向前扩展 12 个月）
-          "2026"          → "2025-2026"
-          "202605"        → "202405-202605"
-
-        Args:
-            period: 原始时间段
-            months_back: 向前扩展的月数，默认 12
-
-        Returns:
-            扩展后的时间段字符串
-        """
-        from crawler.sources.cpi_source import _period_to_dts
-
-        if not period:
-            return period
-
-        dts = _period_to_dts(period)
-        if not dts:
-            return period
-
-        dt_range = dts[0]
-        if "-" in dt_range:
-            parts = dt_range.split("-")
-            start_code = parts[0].replace("MM", "")
-            end_code = parts[1].replace("MM", "")
-        else:
-            start_code = dt_range.replace("MM", "")
-            end_code = start_code
-
-        # 向前推 months_back 个月
-        start_year = int(start_code[:4])
-        start_month = int(start_code[4:6])
-        start_month -= months_back
-        while start_month <= 0:
-            start_year -= 1
-            start_month += 12
-        new_start = f"{start_year:04d}{start_month:02d}"
-
-        # 分别用扩展后的起始和原始结束构建范围
-        expanded = f"{new_start}-{end_code}"
-        return expanded
-
-    def get_cpi_with_buffer(
-        self,
-        period: str | None = None,
-        indicators: str | list[str] | None = None,
-        group: str | None = None,
-        buffer_months: int = 12,
-    ) -> tuple[list[DataPoint], str]:
-        """
-        获取 CPI 数据并附带额外的缓冲月份（用于增长率计算）。
-
-        返回 (扩展后的完整数据, 原始period)，调用方可以用原始 period
-        过滤增长结果，只保留目标范围内的数据。
-
-        Args:
-            period: 目标时间段
-            indicators: 指标筛选
-            group: 分组筛选
-            buffer_months: 缓冲月数，默认 12（同比需要前 12 个月）
-
-        Returns:
-            (data_with_buffer, original_period)
-        """
-        if not period:
-            return self.get_cpi(indicators=indicators, group=group), period
-
-        expanded_period = self._expand_period_for_growth(period, buffer_months)
-        data = self.get_cpi(indicators=indicators, group=group, period=expanded_period)
-        return data, period
 
     # ── 数据完整性检查 ──────────────────────────────
 

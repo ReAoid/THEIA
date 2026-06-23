@@ -1,7 +1,7 @@
 /**
  * THEIA · 图表渲染模块
  *
- * 基于 Chart.js 绘制折线图和增长率图。
+ * 基于 Chart.js 绘制 CPI 走势折线图。
  * 复用图表实例更新数据，避免 destroy+recreate 导致的宽度丢失问题。
  */
 
@@ -41,15 +41,18 @@ function getDatasetStyle(i) {
   };
 }
 
-/** 短名称映射（去掉括号后缀，保持与概览一致） */
+/** 短名称映射（全量，与 app.js 的 CPI_NAME_MAP 保持一致） */
 const SHORT_LABELS = {
   '居民消费价格指数 (上年同月=100)': '总 CPI',
   '居民消费价格指数(上年同月=100)': '总 CPI',
   '不包括食品和能源居民消费价格指数 (上年同月=100)': '核心 CPI',
+  '不包括食品和能源居民消费价格指数(上年同月=100)': '核心 CPI',
+  '食品烟酒及在外餐饮类居民消费价格指数(上年同月=100)': '食品烟酒',
+  '食品烟酒及在外餐饮类居民消费价格指数 (上年同月=100)': '食品烟酒',
+  '食品烟酒类居民消费价格指数(上年同月=100)': '食品烟酒',
+  '食品烟酒类居民消费价格指数 (上年同月=100)': '食品烟酒',
   '居住类居民消费价格指数 (上年同月=100)': '居住',
   '居住类居民消费价格指数(上年同月=100)': '居住',
-  '食品烟酒及在外餐饮类居民消费价格指数(上年同月=100)': '食品烟酒',
-  '食品烟酒类居民消费价格指数(上年同月=100)': '食品烟酒',
   '交通通信类居民消费价格指数 (上年同月=100)': '交通通信',
   '交通通信类居民消费价格指数(上年同月=100)': '交通通信',
   '教育文化娱乐类居民消费价格指数 (上年同月=100)': '教育文化',
@@ -76,7 +79,9 @@ function getLineOptions() {
         callbacks: {
           label(ctx) {
             const val = ctx.parsed.y;
-            return `${ctx.dataset.label || ''}: ${val !== null ? val.toFixed(2) : 'N/A'}`;
+            if (val === null) return `${ctx.dataset.label || ''}: N/A`;
+            const sign = val >= 0 ? '+' : '';
+            return `${ctx.dataset.label || ''}: ${sign}${val.toFixed(2)}%`;
           },
         },
       },
@@ -85,34 +90,7 @@ function getLineOptions() {
       x: { grid: { display: false }, ticks: { maxTicksLimit: 15, font: { size: 11 } } },
       y: {
         grid: { color: 'rgba(0,0,0,0.06)' },
-        ticks: { font: { size: 11 }, callback: (v) => v.toFixed(1) },
-      },
-    },
-  };
-}
-
-/** 增长率图 options */
-function getGrowthOptions() {
-  return {
-    responsive: true,
-    maintainAspectRatio: true,
-    interaction: { intersect: false, mode: 'index' },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        callbacks: {
-          label(ctx) {
-            const val = ctx.parsed.y;
-            return `${ctx.dataset.label || ''}: ${val !== null ? val.toFixed(2) + '%' : 'N/A'}`;
-          },
-        },
-      },
-    },
-    scales: {
-      x: { grid: { display: false }, ticks: { maxTicksLimit: 15, font: { size: 11 } } },
-      y: {
-        grid: { color: 'rgba(0,0,0,0.06)' },
-        ticks: { font: { size: 11 }, callback: (v) => v.toFixed(2) + '%' },
+        ticks: { font: { size: 11 }, callback: (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%' },
       },
     },
   };
@@ -140,17 +118,15 @@ function buildCustomLegend(container, datasets) {
 }
 
 /**
- * 复用或创建图表
+ * 复用或创建折线图
  * @param {HTMLCanvasElement} canvas
  * @param {object} chartData - { labels, datasets }
- * @param {'line'|'growth'} type
  * @returns {Chart}
  */
-function renderChart(canvas, chartData, type) {
+function renderChart(canvas, chartData) {
   if (!canvas || !chartData || !chartData.labels || !chartData.labels.length) return null;
 
-  const isGrowth = type === 'growth';
-  const options = isGrowth ? getGrowthOptions() : getLineOptions();
+  const options = getLineOptions();
 
   const datasets = chartData.datasets.map((ds, i) => ({
     ...ds,
@@ -158,7 +134,7 @@ function renderChart(canvas, chartData, type) {
     fill: false,
     tension: 0.3,
     spanGaps: true,
-    type: isGrowth ? (ds.type || 'bar') : 'line',
+    type: 'line',
     // 缩短标签名
     label: SHORT_LABELS[ds.label] || ds.label,
   }));
@@ -177,7 +153,7 @@ function renderChart(canvas, chartData, type) {
 
   // ── 首次创建 ──
   const chart = new Chart(canvas.getContext('2d'), {
-    type: isGrowth ? 'bar' : 'line',
+    type: 'line',
     data: { labels: chartData.labels, datasets },
     options,
   });
@@ -194,12 +170,5 @@ function renderChart(canvas, chartData, type) {
  * 绘制 CPI 走势图（折线图）
  */
 export function renderLineChart(canvas, chartData) {
-  return renderChart(canvas, chartData, 'line');
-}
-
-/**
- * 绘制增长率图表
- */
-export function renderGrowthChart(canvas, chartData) {
-  return renderChart(canvas, chartData, 'growth');
+  return renderChart(canvas, chartData);
 }

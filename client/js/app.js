@@ -8,13 +8,12 @@ import {
   fetchOverview,
   fetchIndicators,
   fetchData,
-  fetchGrowth,
   fetchSummary,
   fetchChart,
   fetchGroups,
 } from '/js/api.js';
 
-import { renderLineChart, renderGrowthChart } from '/js/charts.js';
+import { renderLineChart } from '/js/charts.js';
 
 /* ══════════════════════════════════════════════════════
    全局状态
@@ -119,7 +118,7 @@ async function refreshAll() {
   if (state.selectedGroup) params.group = state.selectedGroup;
 
   // 图表参数：优先使用图表多选指标
-  const chartParams = { period: currentPeriod, type: state.chartType };
+  const chartParams = { period: currentPeriod };
   if (state.chartSelectedIndicators.length > 0) {
     chartParams.indicator = state.chartSelectedIndicators.join(',');
   } else if (state.selectedIndicator) {
@@ -181,13 +180,14 @@ function renderKpiCards(res) {
   const spanEl = $('#kpi-timespan');
   if (spanEl) spanEl.textContent = summary.date_range || '--';
 
-  // 最新 CPI — 找第一个指标
+  // 最新 CPI — 找第一个指标（显示为增速值）
   const cpiEl = $('#kpi-latest-cpi');
   const cpiChangeEl = $('#kpi-cpi-change');
   if (cpiEl && latest.length > 0) {
     const first = latest[0];
-    cpiEl.textContent = first.value !== null && first.value !== undefined
-      ? first.value.toFixed(1)
+    const growthVal = cpiToGrowth(first.value);
+    cpiEl.textContent = growthVal !== null
+      ? (growthVal >= 0 ? '+' : '') + growthVal.toFixed(1)
       : '--';
     if (cpiChangeEl) {
       if (first.latest_change !== null && first.latest_change !== undefined) {
@@ -252,15 +252,9 @@ function renderOverview(res) {
     </div>
   `;
 
-  // 去重 + 排序：同名只保留一个，按标准顺序排列
-  const seenNames = new Set();
-  const deduped = latest.filter(item => {
-    const key = (item.indicator || '').replace(/\(.*?\)/g, '').trim();
-    if (seenNames.has(key)) return false;
-    seenNames.add(key);
-    return true;
-  });
-  const sortedLatest = sortByIndicatorOrder(deduped, 'indicator');
+  // 合并同名指标（如食品烟酒跨周期两个名称），按标准顺序排列
+  const mergedLatest = mergeLatest(latest);
+  const sortedLatest = sortByIndicatorOrder(mergedLatest, 'indicator');
   for (const item of sortedLatest) {
     const trendIcon = item.trend === 'up' ? '📈' : item.trend === 'down' ? '📉' : '➡️';
     const changeStr = item.latest_change !== null && item.latest_change !== undefined
@@ -268,10 +262,14 @@ function renderOverview(res) {
       : '';
     const valColor = item.trend === 'up' ? 'var(--danger)' : item.trend === 'down' ? 'var(--success)' : 'inherit';
 
+    const displayVal = cpiToGrowth(item.value);
+    const valStr = displayVal !== null
+      ? (displayVal >= 0 ? '+' : '') + displayVal.toFixed(1) + '%'
+      : 'N/A';
     html += `
       <div class="overview-card">
         <div class="indicator-name">${trendIcon} ${escapeHtml(item.indicator)}</div>
-        <div class="value" style="color:${valColor}">${item.value !== null && item.value !== undefined ? item.value.toFixed(1) : 'N/A'}</div>
+        <div class="value" style="color:${valColor}">${valStr}</div>
         <div class="meta">
           <span>${item.date || ''}</span>
           <span class="trend-${item.trend || 'stable'}">${changeStr}</span>
@@ -315,11 +313,15 @@ function renderTable() {
 
   let html = '';
   for (const row of pageData) {
-    const val = row.value !== null && row.value !== undefined ? row.value.toFixed(2) : 'N/A';
+    const displayVal = cpiToGrowth(row.value);
+    const val = displayVal !== null
+      ? (displayVal >= 0 ? '+' : '') + displayVal.toFixed(2)
+      : 'N/A';
+    const shortName = normName(row.indicator || '');
     html += `
       <tr>
         <td>${escapeHtml(row.date || '')}</td>
-        <td title="${escapeHtml(row.indicator || '')}">${escapeHtml(truncate(row.indicator || '', 40))}</td>
+        <td title="${escapeHtml(row.indicator || '')}">${escapeHtml(shortName)}</td>
         <td>${val}</td>
         <td>${escapeHtml(row.unit || '')}</td>
         <td>${escapeHtml(row.region || '')}</td>
@@ -348,16 +350,22 @@ function renderChart(res) {
   mainChart.style.display = 'block';
   document.getElementById('chart-empty').style.display = 'none';
 
-  // 按指标顺序排序数据集，使图例与概览顺序一致
-  if (chartData.datasets) {
-    chartData.datasets = sortByIndicatorOrder(chartData.datasets, 'label');
-  }
+  // 合并同名指标数据集（如食品烟酒跨周期两个名称）
+  const mergedDatasets = mergeDatasets(chartData.datasets || []);
 
-  if (state.chartType === 'growth') {
-    renderGrowthChart(mainChart, chartData);
-  } else {
-    renderLineChart(mainChart, chartData);
-  }
+  // 按指标顺序排序
+  const sortedDatasets = sortByIndicatorOrder(mergedDatasets, 'label');
+
+  // 将官方同比指数（上年同月=100）转换为增速值（指数 - 100）
+  const transformedData = {
+    labels: chartData.labels,
+    datasets: sortedDatasets.map(ds => ({
+      ...ds,
+      data: ds.data.map(v => v !== null && v !== undefined ? v - 100 : null),
+    })),
+  };
+
+  renderLineChart(mainChart, transformedData);
 }
 
 function renderSummary(res) {
@@ -367,24 +375,26 @@ function renderSummary(res) {
   }
 
   const details = res.data.details;
-  // 按指标顺序排序
-  const sortedEntries = sortByIndicatorOrder(
-    Object.entries(details).map(([name, info]) => ({ name, ...info })),
-    'name'
-  );
+  // 合并同名指标（如食品烟酒跨周期两个名称）
+  const { merged, order } = mergeSummaryDetails(details);
   let html = '';
 
-  for (const item of sortedEntries) {
-    const name = item.name;
-    const info = item;
+  for (const name of order) {
+    const info = merged[name];
     const trendIcon = info.trend === 'up' ? '📈' : info.trend === 'down' ? '📉' : '➡️';
-    const latestVal = info.latest ? info.latest.value : 'N/A';
+    const latestVal = info.latest ? _fmtGrowth(info.latest.value) : 'N/A';
     const latestDate = info.latest ? info.latest.date : '';
-    const meanVal = info.mean !== undefined ? info.mean.toFixed(2) : '--';
-    const maxVal = info.max ? info.max.value : '--';
-    const minVal = info.min ? info.min.value : '--';
+    const meanVal = info.mean !== undefined ? _fmtGrowth(info.mean) : '--';
+    const maxVal = info.max ? _fmtGrowth(info.max.value) : '--';
+    const minVal = info.min ? _fmtGrowth(info.min.value) : '--';
     const volVal = info.volatility !== undefined ? info.volatility.toFixed(2) : '--';
     const stdVal = info.std !== undefined ? info.std.toFixed(2) : '--';
+
+    function _fmtGrowth(v) {
+      if (v === null || v === undefined) return '--';
+      const g = cpiToGrowth(v);
+      return (g >= 0 ? '+' : '') + g.toFixed(2);
+    }
 
     html += `
       <div class="summary-card">
@@ -457,6 +467,157 @@ function formatTime(date) {
   const h = String(date.getHours()).padStart(2, '0');
   const m = String(date.getMinutes()).padStart(2, '0');
   return `${h}:${m}`;
+}
+
+/* ── 数值转换：官方同比指数 → 增速展示 ──────────── */
+
+/**
+ * 将官方同比指数（上年同月=100）转换为增速值（指数 - 100）。
+ * 例如：101.5 → 1.5，99.8 → -0.2
+ */
+function cpiToGrowth(val) {
+  if (val === null || val === undefined) return null;
+  return val - 100;
+}
+
+/* ── CPI 指标名称归一化 ────────────────────────────
+ *
+ * 国家统计局在不同周期（2021-2025、2026-2030）对同一经济指标
+ * 使用了不同的 UUID 和名称，此映射将全量已知名称统一为短名。
+ */
+
+/** 全量名称 → 短名映射 */
+const CPI_NAME_MAP = {
+  // 总 CPI
+  '居民消费价格指数 (上年同月=100)': '总 CPI',
+  '居民消费价格指数(上年同月=100)': '总 CPI',
+  // 核心 CPI
+  '不包括食品和能源居民消费价格指数 (上年同月=100)': '核心 CPI',
+  '不包括食品和能源居民消费价格指数(上年同月=100)': '核心 CPI',
+  // 食品烟酒（跨周期名称不同）
+  '食品烟酒及在外餐饮类居民消费价格指数(上年同月=100)': '食品烟酒',
+  '食品烟酒及在外餐饮类居民消费价格指数 (上年同月=100)': '食品烟酒',
+  '食品烟酒类居民消费价格指数(上年同月=100)': '食品烟酒',
+  '食品烟酒类居民消费价格指数 (上年同月=100)': '食品烟酒',
+  // 居住
+  '居住类居民消费价格指数 (上年同月=100)': '居住',
+  '居住类居民消费价格指数(上年同月=100)': '居住',
+  // 交通通信
+  '交通通信类居民消费价格指数 (上年同月=100)': '交通通信',
+  '交通通信类居民消费价格指数(上年同月=100)': '交通通信',
+  // 教育文化娱乐
+  '教育文化娱乐类居民消费价格指数 (上年同月=100)': '教育文化',
+  '教育文化娱乐类居民消费价格指数(上年同月=100)': '教育文化',
+  // 医疗保健
+  '医疗保健类居民消费价格指数 (上年同月=100)': '医疗保健',
+  '医疗保健类居民消费价格指数(上年同月=100)': '医疗保健',
+  // 生活用品及服务
+  '生活用品及服务类居民消费价格指数 (上年同月=100)': '生活用品',
+  '生活用品及服务类居民消费价格指数(上年同月=100)': '生活用品',
+  // 衣着
+  '衣着类居民消费价格指数 (上年同月=100)': '衣着',
+  '衣着类居民消费价格指数(上年同月=100)': '衣着',
+  // 其他用品及服务
+  '其他用品及服务类居民消费价格指数 (上年同月=100)': '其他',
+  '其他用品及服务类居民消费价格指数(上年同月=100)': '其他',
+};
+
+/**
+ * 将 CPI 指标全名归一化为短名。
+ * 如果找不到映射，返回原始名称。
+ */
+function normName(fullName) {
+  return CPI_NAME_MAP[fullName] || fullName;
+}
+
+/**
+ * 对数据集（数组）按归一化名称合并：
+ * 同名的 data 数组按索引取第一个非空值合并。
+ */
+function mergeDatasets(datasets) {
+  const groups = {};
+  for (const ds of datasets) {
+    const shortName = normName(ds.label);
+    if (!groups[shortName]) {
+      groups[shortName] = { ...ds, label: shortName, data: [...ds.data] };
+    } else {
+      // 合并 data：优先用非空值
+      const target = groups[shortName];
+      for (let i = 0; i < ds.data.length; i++) {
+        if (target.data[i] === null || target.data[i] === undefined) {
+          target.data[i] = ds.data[i];
+        }
+      }
+    }
+  }
+  return Object.values(groups);
+}
+
+/**
+ * 对 latest/overview 数组按归一化名称去重合并，
+ * 同名保留日期最新的那条。
+ */
+function mergeLatest(items) {
+  const groups = {};
+  for (const item of items) {
+    const shortName = normName(item.indicator || item.name || '');
+    if (!groups[shortName] || item.date > groups[shortName].date) {
+      groups[shortName] = { ...item, indicator: shortName };
+    }
+  }
+  return Object.values(groups);
+}
+
+/**
+ * 对 summary details 按归一化名称合并统计值。
+ */
+function mergeSummaryDetails(details) {
+  const merged = {};
+  const order = [];
+  for (const [fullName, info] of Object.entries(details)) {
+    const shortName = normName(fullName);
+    if (!merged[shortName]) {
+      merged[shortName] = { ...info, _count: 1 };
+      order.push(shortName);
+    } else {
+      // 合并统计：取范围更大的
+      const existing = merged[shortName];
+      existing._count++;
+      existing.count += info.count || 0;
+      // 日期范围取并集
+      const oldRange = existing.date_range || '';
+      const newRange = info.date_range || '';
+      if (newRange && oldRange) {
+        const oldStart = oldRange.split(' ~ ')[0];
+        const oldEnd = oldRange.split(' ~ ')[1];
+        const newStart = newRange.split(' ~ ')[0];
+        const newEnd = newRange.split(' ~ ')[1];
+        existing.date_range = `${oldStart < newStart ? oldStart : newStart} ~ ${oldEnd > newEnd ? oldEnd : newEnd}`;
+      } else if (newRange && !oldRange) {
+        existing.date_range = newRange;
+      }
+      // latest 取最新日期
+      if (info.latest && (!existing.latest || info.latest.date > existing.latest.date)) {
+        existing.latest = info.latest;
+      }
+      // 数值统计取合并后的
+      if (info.mean !== undefined) {
+        existing.mean = (existing.mean || 0) + info.mean;  // 简化处理，会偏
+      }
+      if (info.max && (!existing.max || info.max.value > existing.max.value)) {
+        existing.max = info.max;
+      }
+      if (info.min && (!existing.min || info.min.value < existing.min.value)) {
+        existing.min = info.min;
+      }
+      if (info.volatility !== undefined) {
+        const v1 = existing.volatility || 0;
+        const v2 = info.volatility || 0;
+        existing.volatility = Math.max(v1, v2);
+      }
+    }
+  }
+  return { merged, order };
 }
 
 /* ── 指标 Tooltip 说明 ──────────────────────────── */
@@ -661,15 +822,8 @@ function bindEvents() {
     });
   });
 
-  // 图表标签切换（CPI 页）
-  chartTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      chartTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      state.chartType = tab.dataset.type;
-      loadChartOnly();
-    });
-  });
+  // 图表标签（仅保留折线图，移除增长率切换按钮）
+  document.querySelectorAll('.chart-tab[data-type="growth"]').forEach(el => el.remove());
 
   // 图表指标下拉按钮
   if (chartIndicatorBtn) {
@@ -739,10 +893,13 @@ function buildChartIndicatorList() {
 
   if (!filtered.length) {
     // 兜底：如果后端没返回 group 信息，改用名称关键词匹配
+    // 同时包含新旧两个周期的指标名称
     const keywords = [
       '居民消费价格指数 (上年同月=100)',
+      '居民消费价格指数(上年同月=100)',
       '不包括食品和能源居民消费价格指数 (上年同月=100)',
       '食品烟酒及在外餐饮类',
+      '食品烟酒类',
       '衣着类',
       '居住类',
       '生活用品及服务类',
@@ -790,9 +947,17 @@ function buildChartIndicatorList() {
     return getNameOrder(a) - getNameOrder(b);
   });
 
-  // 默认全部选中
-  state.chartSelectedIndicators = unique.map(ind => ind.name);
-  state.chartIndicatorAllSelected = true;
+  // 默认只选中总 CPI 和核心 CPI（同时包含新旧周期名称）
+  const defaultNames = [
+    '居民消费价格指数 (上年同月=100)',
+    '居民消费价格指数(上年同月=100)',
+    '不包括食品和能源居民消费价格指数 (上年同月=100)',
+    '不包括食品和能源居民消费价格指数(上年同月=100)',
+  ];
+  state.chartSelectedIndicators = unique
+    .filter(ind => defaultNames.some(d => ind.name === d))
+    .map(ind => ind.name);
+  state.chartIndicatorAllSelected = false;
 
   // 分组构建 HTML
   const groupLabels = {
@@ -872,7 +1037,7 @@ function getIndicatorColor(index) {
 }
 
 async function loadChartOnly() {
-  const params = { period: getCurrentPeriod(), type: state.chartType };
+  const params = { period: getCurrentPeriod() };
 
   // 使用图表多选的指标（如果未选任何指标，传空则后端返回全部）
   if (state.chartSelectedIndicators.length > 0) {

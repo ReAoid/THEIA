@@ -10,7 +10,6 @@ CPI RESTful API Blueprint
   GET  /api/v1/cpi/overview       → 总体概览
   GET  /api/v1/cpi/indicators     → 指标列表
   GET  /api/v1/cpi/data           → 原始数据（带筛选）
-  GET  /api/v1/cpi/growth         → 增长率数据
   GET  /api/v1/cpi/summary        → 统计摘要
   GET  /api/v1/cpi/chart          → 图表友好数据
   GET  /api/v1/cpi/groups         → 分组列表
@@ -22,10 +21,8 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from analysis.calculator import (
-    calculate_growth,
     analyze_trend,
     prepare_chart_data,
-    prepare_growth_chart_data,
 )
 from manager.cpi_manager import CPIManager
 
@@ -230,63 +227,6 @@ def get_data():
         return _error(str(e), 500)
 
 
-@api_bp.route("/growth", methods=["GET"])
-def growth():
-    """
-    增长率数据。
-
-    GET /api/v1/cpi/growth?indicator=居民消费价格指数&period=202601-202605
-
-    Query:
-        growth_period: "year"（同比, 默认）或 "month"（环比）
-
-    注意：同比计算会自动额外加载前 12 个月的数据作为缓冲，
-         确保目标范围内每个月份都能算出同比增长。
-    """
-    try:
-        params = _parse_params()
-        growth_period = request.args.get("growth_period", "year")
-        original_period = params.get("period")
-
-        mgr = get_manager()
-
-        if growth_period == "year" and original_period:
-            # 同比计算：自动扩展 12 个月缓冲，获取足够的前期数据
-            data, _ = mgr.get_cpi_with_buffer(
-                period=original_period,
-                indicators=params["indicators"],
-                group=params["group"],
-                buffer_months=12,
-            )
-        else:
-            data = _get_data(
-                indicators=params["indicators"],
-                period=original_period,
-                group=params["group"],
-                force_update=params["force_update"],
-            )
-
-        if not data:
-            return _error("无匹配数据", 404)
-
-        growth_data = calculate_growth(
-            data,
-            period=growth_period,
-            filter_period=original_period if growth_period == "year" else None,
-        )
-
-        return jsonify({
-            "success": True,
-            "count": len(growth_data),
-            "growth_period": growth_period,
-            "data": growth_data,
-        })
-
-    except Exception as e:
-        logger.exception("growth 异常")
-        return _error(str(e), 500)
-
-
 @api_bp.route("/summary", methods=["GET"])
 def summary():
     """
@@ -327,52 +267,25 @@ def chart():
          &period=202601-202605
 
     Query:
-        type: "line"（折线图, 默认）或 "growth"（增长率图）
-        growth_period: "year"（同比, 默认）或 "month"（环比）
-
-    注意：增长率图会自动加载前 12 个月数据作为缓冲，
-         确保图表完整显示。
+        type: "line"（折线图, 默认）
     """
     try:
         params = _parse_params()
-        chart_type = request.args.get("type", "line")
-        growth_period = request.args.get("growth_period", "year")
-        original_period = params.get("period")
-
-        mgr = get_manager()
-
-        if chart_type == "growth" and original_period:
-            # 增长率图表：自动扩展 12 个月缓冲
-            data, _ = mgr.get_cpi_with_buffer(
-                period=original_period,
-                indicators=params["indicators"],
-                group=params["group"],
-                buffer_months=12,
-            )
-        else:
-            data = _get_data(
-                indicators=params["indicators"],
-                period=original_period,
-                group=params["group"],
-                force_update=params["force_update"],
-            )
+        data = _get_data(
+            indicators=params["indicators"],
+            period=params["period"],
+            group=params["group"],
+            force_update=params["force_update"],
+        )
 
         if not data:
             return _error("无匹配数据", 404)
 
-        if chart_type == "growth":
-            growth_data = calculate_growth(
-                data,
-                period=growth_period,
-                filter_period=original_period if growth_period == "year" else None,
-            )
-            chart_data = prepare_growth_chart_data(growth_data, params["indicators"])
-        else:
-            chart_data = prepare_chart_data(data, params["indicators"])
+        chart_data = prepare_chart_data(data)
 
         return jsonify({
             "success": True,
-            "chart_type": chart_type,
+            "chart_type": "line",
             "data": chart_data,
         })
 

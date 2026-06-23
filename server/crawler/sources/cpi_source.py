@@ -2,7 +2,7 @@
 数据源：CPI 专项（居民消费价格指数）
 
 基于国家统计局新版 esData API，封装 CPI 特有的指标注册表、
-分组查询、同比/环比计算等逻辑。
+分组查询等逻辑。
 
 新版 API（2024+）：
     POST https://data.stats.gov.cn/dg/website/publicrelease/web/external/stream/esData
@@ -181,6 +181,49 @@ CPI_UUID_INDICATORS = {
     "c2050e97c49a4763a6d0f0f38bf0b4ed": "不包括食品和能源居民消费价格指数 (上年同月=100)",
 }
 
+
+# ── 跨周期指标别名映射 ──────────────────────────────
+#
+# 2026 年 CPI 篮子改革后，部分指标名称和 UUID 发生了变化。
+# 同一经济含义的指标在不同周期有不同 UUID/名称，
+# 此映射将旧周期 UUID 关联到新周期 UUID，用于查询时自动合并。
+#
+# 格式：{ 新周期 UUID: [旧周期 UUID, ...] }
+
+CPI_CROSS_PERIOD_ALIASES: dict[str, list[str]] = {
+    # 食品烟酒及在外餐饮类（2026+）← 食品烟酒类（2021-2025）
+    "42c2d9b5d1b749c4b68c2cbd2e3d4a42": [
+        "fce9ac527a74442ea0031eb6b37f52ad",
+    ],
+    # 居住类
+    "4fb7ea343fc7403bb412cf48fb2f3f0e": [
+        "e492fe37645349f0a1c84d96174bf606",
+    ],
+    # 生活用品及服务类
+    "e4a6cd580cfe43c3a92140d2edb5e7df": [
+        "a8437c1e6cfc41d3b08f10e63df7a9c3",
+    ],
+    # 交通通信类
+    "e6e42078f30e483b899b2701a766909a": [
+        "5fdc380a7f65401f9df852e9fb805d50",
+    ],
+    # 教育文化娱乐类
+    "e2636c6c7549458ca90057f9b7eff442": [
+        "77d9645f8acf4f28b397213b14bc8088",
+    ],
+    # 医疗保健类
+    "27cc82bede504fbc896c02a412bc7671": [
+        "0405e430a16c49eba5a83f9341ff7615",
+    ],
+    # 其他用品及服务类
+    "2cf481203dd0404c8b778d435d401c7a": [
+        "71b1221d90734165b7d1c8ce03f116aa",
+    ],
+    # 不包括食品和能源（核心CPI）
+    "71be3d43d2fb44188199840272463ae0": [
+        "c2050e97c49a4763a6d0f0f38bf0b4ed",
+    ],
+}
 
 # ── CPI 分组结构 ────────────────────────────────────
 #
@@ -783,63 +826,6 @@ class CPISource(DataSource):
 
             # 请求间隔
             _time.sleep(1.0)
-
-        return results
-
-    @staticmethod
-    def calc_yoy(data: list[DataPoint]) -> list[dict]:
-        """
-        计算同比增长率。
-
-        YoY = (当期值 / 上年同期值 - 1) * 100
-
-        注意：CPI(上年同月=100) 本身就是同比指数，
-        这里展示的是"同比的同比"变化，通常用于分析 CPI 走势加速度。
-        """
-        if not data:
-            return []
-
-        sorted_data = sorted(data, key=lambda d: (d.indicator, d.date))
-        results = []
-
-        for d in sorted_data:
-            entry = d.to_dict()
-            entry["yoy"] = None
-
-            if len(d.date) == 7:  # YYYY-MM
-                prev_date = f"{int(d.date[:4]) - 1}{d.date[4:]}"
-                for prev in sorted_data:
-                    if (prev.date == prev_date
-                            and prev.indicator == d.indicator
-                            and prev.value):
-                        entry["yoy"] = round(
-                            (d.value / prev.value - 1) * 100, 2
-                        )
-                        break
-
-            results.append(entry)
-
-        return results
-
-    @staticmethod
-    def calc_mom(data: list[DataPoint]) -> list[dict]:
-        """计算环比增长率。"""
-        if not data:
-            return []
-
-        sorted_data = sorted(data, key=lambda d: (d.indicator, d.date))
-        results = []
-
-        for i, d in enumerate(sorted_data):
-            entry = d.to_dict()
-            entry["mom"] = None
-            if i > 0 and sorted_data[i - 1].indicator == d.indicator:
-                prev = sorted_data[i - 1]
-                if prev.value:
-                    entry["mom"] = round(
-                        (d.value / prev.value - 1) * 100, 2
-                    )
-            results.append(entry)
 
         return results
 

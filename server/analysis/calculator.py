@@ -2,10 +2,9 @@
 通用数据计算器
 
 对统一数据格式 list[DataPoint] 做各类计算：
-  1. 同比/环比增长率
-  2. 移动平均
-  3. 趋势分析（最高/最低/均值/波动）
-  4. 统计摘要
+  1. 移动平均
+  2. 趋势分析（最高/最低/均值/波动）
+  3. 统计摘要
 
 所有函数都是纯函数，不依赖任何外部状态。
 入参出参都是 list[DataPoint] 或基本 Python 类型。
@@ -18,145 +17,6 @@ from typing import Any
 from crawler.base import DataPoint
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════
-#  增长率计算
-# ═══════════════════════════════════════════════════════════
-
-def _parse_period_boundaries(period: str) -> tuple[int, int] | None:
-    """
-    解析 period 字符串为 (start_yyyymm, end_yyyymm) 整数边界。
-
-    例如："202406-202605" → (202406, 202605)
-          "2026"          → (202601, 202612)
-          "202605"        → (202605, 202605)
-
-    Returns:
-        (start_key, end_key) or None if parsing fails
-    """
-    from crawler.sources.cpi_source import _period_to_dts
-
-    dts = _period_to_dts(period)
-    if not dts:
-        return None
-
-    dt_range = dts[0]
-    if "-" in dt_range:
-        parts = dt_range.split("-")
-        start = int(parts[0].replace("MM", ""))
-        end = int(parts[1].replace("MM", ""))
-    else:
-        val = int(dt_range.replace("MM", ""))
-        start = end = val
-
-    return (start, end)
-
-
-def filter_by_period(results: list[dict], period: str) -> list[dict]:
-    """
-    过滤增长率结果，只保留目标 period 范围内的数据。
-
-    用于：在扩展数据上计算增长率后，截取目标范围内的结果。
-
-    Args:
-        results: calculate_growth() 的输出
-        period: 目标时间段
-
-    Returns:
-        过滤后的结果
-    """
-    if not period or not results:
-        return results
-
-    boundaries = _parse_period_boundaries(period)
-    if not boundaries:
-        return results
-
-    start_key, end_key = boundaries
-
-    def _to_key(date_str: str) -> int:
-        return int(date_str.replace("-", ""))
-
-    return [
-        r for r in results
-        if start_key <= _to_key(r.get("date", "")) <= end_key
-    ]
-
-
-def calculate_growth(
-    data: list[DataPoint],
-    period: str = "year",
-    filter_period: str | None = None,
-) -> list[dict]:
-    """
-    计算增长率。
-
-    Args:
-        data: DataPoint 列表（已包含缓冲月份）
-        period: "year" → 同比增长（YoY），"month" → 环比增长（MoM）
-        filter_period: 可选，只保留此时间段内的结果（用于在扩展数据上
-                       计算后截取目标范围）。
-
-    Returns:
-        [ {date, value, indicator, region, unit, growth, growth_label}, ... ]
-        growth=None 表示无法计算（数据不足）
-    """
-    if not data:
-        return []
-
-    sorted_data = sorted(data, key=lambda d: (d.indicator, d.date))
-    results: list[dict] = []
-
-    if period == "year":
-        # 同比增长：与上年同月比较
-        for d in sorted_data:
-            entry = d.to_dict()
-            entry["growth"] = None
-            entry["growth_label"] = "同比"
-
-            if len(d.date) == 7:  # YYYY-MM
-                prev_date = f"{int(d.date[:4]) - 1}{d.date[4:]}"
-                for prev in sorted_data:
-                    if (prev.date == prev_date
-                            and prev.indicator == d.indicator
-                            and prev.value is not None
-                            and d.value is not None
-                            and prev.value != 0):
-                        entry["growth"] = round(
-                            (d.value / prev.value - 1) * 100, 2
-                        )
-                        break
-
-            results.append(entry)
-
-    elif period == "month":
-        # 环比增长：与上个月比较
-        for i, d in enumerate(sorted_data):
-            entry = d.to_dict()
-            entry["growth"] = None
-            entry["growth_label"] = "环比"
-
-            if i > 0:
-                prev = sorted_data[i - 1]
-                if (prev.indicator == d.indicator
-                        and prev.value is not None
-                        and d.value is not None
-                        and prev.value != 0):
-                    entry["growth"] = round(
-                        (d.value / prev.value - 1) * 100, 2
-                    )
-
-            results.append(entry)
-
-    else:
-        raise ValueError(f"不支持的 period 参数: {period!r}，可选: 'year', 'month'")
-
-    # 可选：过滤回目标时间段
-    if filter_period:
-        results = filter_by_period(results, filter_period)
-
-    return results
 
 
 # ═══════════════════════════════════════════════════════════
@@ -381,59 +241,4 @@ def prepare_chart_data(
     }
 
 
-# ═══════════════════════════════════════════════════════════
-#  增长率图表数据
-# ═══════════════════════════════════════════════════════════
 
-def prepare_growth_chart_data(
-    growth_data: list[dict],
-    indicators: list[str] | None = None,
-) -> dict:
-    """
-    将增长率数据转换为 Chart.js 柱状图格式。
-
-    Args:
-        growth_data: calculate_growth() 的输出
-        indicators: 要包含的指标名列表
-
-    Returns:
-        { "labels": [...], "datasets": [...] }
-    """
-    if not growth_data:
-        return {"labels": [], "datasets": []}
-
-    # 过滤
-    if indicators:
-        growth_data = [g for g in growth_data if g.get("indicator") in indicators]
-
-    # 按指标分组
-    by_indicator: dict[str, dict] = defaultdict(lambda: {"label": "", "data_map": {}})
-
-    for g in growth_data:
-        ind = g.get("indicator", "")
-        if indicators and ind not in indicators:
-            continue
-        by_indicator[ind]["label"] = ind
-        by_indicator[ind]["data_map"][g["date"]] = g.get("growth")
-
-    # 日期标签
-    all_dates = sorted({g["date"] for g in growth_data
-                       if not indicators or g.get("indicator") in indicators})
-
-    colors = ["#FF6384", "#36A2EB", "#FFCE56"]
-
-    datasets = []
-    for i, (_, info) in enumerate(by_indicator.items()):
-        datasets.append({
-            "label": info["label"],
-            "data": [info["data_map"].get(date) for date in all_dates],
-            "borderColor": colors[i % len(colors)],
-            "backgroundColor": colors[i % len(colors)] + "66",
-            "type": "line" if i > 0 else "bar",
-            "tension": 0.3,
-        })
-
-    return {
-        "labels": all_dates,
-        "datasets": datasets,
-    }
