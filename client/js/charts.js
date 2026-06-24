@@ -80,7 +80,7 @@ const SHORT_LABELS = {
 function getLineOptions() {
   return {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     interaction: { intersect: false, mode: 'index' },
     plugins: {
       legend: { display: false },

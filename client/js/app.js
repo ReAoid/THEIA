@@ -144,6 +144,9 @@ async function init() {
   // 切换到 CPI 页面并加载数据
   switchSection('cpi');
   await refreshAll();
+
+  // 后台预加载货币供应量数据（静默缓存，切换时秒开）
+  preloadMoneySupply();
 }
 
 /* ══════════════════════════════════════════════════════
@@ -561,6 +564,19 @@ async function loadMsIndicators() {
   }
 }
 
+async function preloadMoneySupply() {
+  try {
+    // 静默拉取近 12 个月货币供应量数据到缓存
+    const endYM = getLatestMsMonth();
+    const startYM = subtractMonths(endYM, 11);
+    const period = `${startYM}-${endYM}`;
+    await fetchMsData({ period }).catch(() => {});
+    console.log('货币供应量数据预加载完成');
+  } catch (e) {
+    // 静默失败不影响主流程
+  }
+}
+
 async function refreshMs() {
   msAbsoluteGrid.innerHTML = '<div class="loading">🔄 加载中...</div>';
 
@@ -670,9 +686,10 @@ function renderMsChart(res) {
 
 async function renderMsAbsoluteGrid() {
   try {
-    // 只拉最新一个月的期末值数据
-    const latestMonth = getLatestMsMonth();
-    const period = `${latestMonth}`;
+    // 拉最近 6 个月，取最新有数据的月份
+    const endYM = getLatestMsMonth();
+    const startYM = subtractMonths(endYM, 5);
+    const period = `${startYM}-${endYM}`;
     const params = { period, group: '期末值' };
     const dataRes = await fetchMsData(params);
     const data = (dataRes && dataRes.data) || [];
@@ -682,15 +699,23 @@ async function renderMsAbsoluteGrid() {
       return;
     }
 
+    // 按日期分组，取最新月份
+    const byDate = {};
+    for (const d of data) {
+      byDate[d.date] = byDate[d.date] || [];
+      byDate[d.date].push(d);
+    }
+    const dates = Object.keys(byDate).sort();
+    const latestDate = dates[dates.length - 1];
+    const latestData = byDate[latestDate];
+
     // 按 M2、M1、M0 排序
     const orderMap = { 'M2': 0, 'M1': 1, 'M0': 2 };
-    const sorted = [...data].sort((a, b) => {
+    const sorted = [...latestData].sort((a, b) => {
       const aKey = Object.keys(orderMap).find(k => a.indicator.includes(k)) || '';
       const bKey = Object.keys(orderMap).find(k => b.indicator.includes(k)) || '';
       return (orderMap[aKey] ?? 99) - (orderMap[bKey] ?? 99);
     });
-
-    const latestDate = sorted[0]?.date || '';
 
     let html = `<div class="overview-card" style="border-left-color: var(--primary-dark);">
       <div class="indicator-name">${latestDate}</div>
@@ -730,9 +755,10 @@ function getCurrentMsPeriod() {
 
 function initMsDefaultPeriod() {
   const endYM = getLatestMsMonth();
-  if (msPeriodStart) msPeriodStart.value = '200001';
+  const startYM = subtractMonths(endYM, 11);
+  if (msPeriodStart) msPeriodStart.value = startYM;
   if (msPeriodEnd) msPeriodEnd.value = endYM;
-  msState.selectedPeriod = `200001-${endYM}`;
+  msState.selectedPeriod = `${startYM}-${endYM}`;
 }
 
 function getLatestMsMonth() {
@@ -778,6 +804,15 @@ function switchSection(sectionId) {
     initMsDefaultPeriod();
     refreshMs();
   }
+
+  // 切换后强制重绘所有可见 chart（解决隐藏容器中 canvas 宽度为 0 的问题）
+  setTimeout(() => {
+    document.querySelectorAll('.page-section.active canvas').forEach(canvas => {
+      if (canvas._chart) {
+        canvas._chart.resize();
+      }
+    });
+  }, 50);
 
   // 在小屏幕上关闭侧边栏
   if (window.innerWidth <= 768) {
