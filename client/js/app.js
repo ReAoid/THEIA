@@ -10,6 +10,17 @@ import {
   fetchData,
   fetchChart,
   fetchGroups,
+  fetchPpiOverview,
+  fetchPpiIndicators,
+  fetchPpiData,
+  fetchPpiChart,
+  fetchPpiGroups,
+  fetchMsOverview,
+  fetchMsIndicators,
+  fetchMsData,
+  fetchMsChart,
+  fetchMsGroups,
+  fetchMsYoy,
 } from '/js/api.js';
 
 import { renderLineChart } from '/js/charts.js';
@@ -28,8 +39,35 @@ const state = {
   chartType: 'line',
   currentSection: 'cpi',
   // 图表多选指标（默认全部）
-  chartSelectedIndicators: [],        // 选中的 indicator name 列表
-  chartIndicatorAllSelected: true,     // 是否全选
+  chartSelectedIndicators: [],
+  chartIndicatorAllSelected: true,
+};
+
+/* ══════════════════════════════════════════════════════
+   PPI 状态
+   ══════════════════════════════════════════════════════ */
+
+const ppiState = {
+  indicators: [],
+  groups: [],
+  selectedIndicator: '',
+  selectedGroup: '',
+  selectedPeriod: '202506-202606',
+  allData: [],
+  chartSelectedIndicators: [],
+  chartIndicatorAllSelected: true,
+};
+
+/* ══════════════════════════════════════════════════════
+   货币供应量状态
+   ══════════════════════════════════════════════════════ */
+
+const msState = {
+  indicators: [],
+  groups: [],
+  selectedPeriod: '200001-202606',
+  allData: [],
+  yoyData: [],
 };
 
 /* ══════════════════════════════════════════════════════
@@ -62,6 +100,30 @@ const chartIndicatorDropdown = $('#chart-indicator-dropdown');
 const chartIndicatorList = $('#chart-indicator-list');
 const chartCheckall = $('#chart-checkall');
 
+// ── PPI DOM 引用 ─────────────────────────────────────
+const ppiOverviewGrid = $('#ppi-overview-grid');
+const ppiChart = $('#ppi-chart');
+const ppiPeriodStart = $('#ppi-period-start');
+const ppiPeriodEnd = $('#ppi-period-end');
+const ppiPeriodPresetBtns = $$('.ppi-period-preset-btn');
+const ppiChartIndicatorBtn = $('#ppi-chart-indicator-btn');
+const ppiChartIndicatorDropdown = $('#ppi-chart-indicator-dropdown');
+const ppiChartIndicatorList = $('#ppi-chart-indicator-list');
+const ppiChartCheckall = $('#ppi-chart-checkall');
+
+// ── 货币供应量 DOM 引用 ──────────────────────────────
+const msChart = $('#ms-chart');
+const msPeriodStart = $('#ms-period-start');
+const msPeriodEnd = $('#ms-period-end');
+const msPeriodPresetBtns = $$('.ms-period-preset-btn');
+const msYoyTbody = $('#ms-yoy-tbody');
+const msAbsoluteGrid = $('#ms-absolute-grid');
+const msKpiTotal = $('#ms-kpi-total');
+const msKpiIndicators = $('#ms-kpi-indicators');
+const msKpiLatestM2 = $('#ms-kpi-latest-m2');
+const msM2Change = $('#ms-m2-change');
+const msKpiTimespan = $('#ms-kpi-timespan');
+
 /* ══════════════════════════════════════════════════════
    初始化
    ══════════════════════════════════════════════════════ */
@@ -69,18 +131,20 @@ const chartCheckall = $('#chart-checkall');
 async function init() {
   // 加载指标列表
   await loadIndicators();
+  await loadPpiIndicators();
+  await loadMsIndicators();
 
   // 绑定事件
   bindEvents();
 
+  // 初始化默认时间段
+  initDefaultPeriod();
+  initPpiDefaultPeriod();
+  initMsDefaultPeriod();
+
   // 切换到 CPI 页面并加载数据
   switchSection('cpi');
   await refreshAll();
-
-  // 加载完成后计算并设置默认时间段
-  initDefaultPeriod();
-
-
 }
 
 /* ══════════════════════════════════════════════════════
@@ -95,6 +159,53 @@ async function loadIndicators() {
     buildChartIndicatorList();
   } catch (e) {
     console.error('加载指标列表失败:', e);
+  }
+}
+
+/* ── PPI 数据加载 ───────────────────────────────── */
+
+async function loadPpiIndicators() {
+  try {
+    const res = await fetchPpiIndicators();
+    ppiState.indicators = res.data || [];
+    ppiState.groups = res.groups || [];
+    buildPpiChartIndicatorList();
+  } catch (e) {
+    console.error('加载 PPI 指标列表失败:', e);
+  }
+}
+
+async function refreshPpi() {
+  ppiOverviewGrid.innerHTML = '<div class="loading">🔄 加载中...</div>';
+
+  const currentPeriod = getCurrentPpiPeriod();
+  const params = { period: currentPeriod };
+
+  // 图表参数
+  const chartParams = { period: currentPeriod };
+  if (ppiState.chartSelectedIndicators.length > 0) {
+    chartParams.indicator = ppiState.chartSelectedIndicators.join(',');
+  }
+
+  try {
+    const [overviewRes, dataRes, chartRes] = await Promise.all([
+      fetchPpiOverview(params).catch(() => null),
+      fetchPpiData(params).catch(() => null),
+      fetchPpiChart(chartParams).catch(() => null),
+    ]);
+
+    renderPpiOverview(overviewRes);
+    renderPpiKpiCards(overviewRes);
+
+    ppiState.allData = (dataRes && dataRes.data) || [];
+
+    renderPpiChart(chartRes);
+
+    lastUpdate.textContent = `已更新 ${formatTime(new Date())}`;
+
+  } catch (e) {
+    console.error('刷新 PPI 数据失败:', e);
+    ppiOverviewGrid.innerHTML = `<div class="loading">❌ 加载失败: ${e.message}</div>`;
   }
 }
 
@@ -297,7 +408,384 @@ function renderChart(res) {
   renderLineChart(mainChart, transformedData);
 }
 
+/* ══════════════════════════════════════════════════════
+   PPI 渲染函数
+   ══════════════════════════════════════════════════════ */
 
+function renderPpiKpiCards(res) {
+  if (!res || !res.data) return;
+
+  const latest = res.data.latest || [];
+  const summary = res.data.summary || {};
+  const totalCount = summary.count ?? res.data.total_count ?? 0;
+  const indicatorCount = summary.indicators ?? res.data.indicator_count ?? 0;
+
+  const totalEl = $('#ppi-kpi-total');
+  if (totalEl) totalEl.textContent = totalCount.toLocaleString();
+
+  const indEl = $('#ppi-kpi-indicators');
+  if (indEl) indEl.textContent = indicatorCount + ' 项';
+
+  const spanEl = $('#ppi-kpi-timespan');
+  if (spanEl) spanEl.textContent = summary.date_range || '--';
+
+  // 最新 PPI
+  const ppiEl = $('#ppi-kpi-latest-ppi');
+  const ppiChangeEl = $('#ppi-ppi-change');
+  if (ppiEl && latest.length > 0) {
+    const first = latest[0];
+    const growthVal = cpiToGrowth(first.value);
+    ppiEl.textContent = growthVal !== null
+      ? (growthVal >= 0 ? '+' : '') + growthVal.toFixed(1)
+      : '--';
+    if (ppiChangeEl) {
+      if (first.latest_change !== null && first.latest_change !== undefined) {
+        const sign = first.latest_change >= 0 ? '+' : '';
+        const cls = first.latest_change >= 0 ? 'positive' : 'negative';
+        ppiChangeEl.textContent = `↑ ${sign}${first.latest_change.toFixed(2)} 较上期`;
+        ppiChangeEl.className = `kpi-change ${cls}`;
+      } else {
+        ppiChangeEl.textContent = '暂无环比数据';
+      }
+    }
+  }
+}
+
+function renderPpiOverview(res) {
+  if (!res || !res.data) {
+    ppiOverviewGrid.innerHTML = '<div class="loading">📭 无概览数据</div>';
+    return;
+  }
+
+  const latest = res.data.latest || [];
+  const summary = res.data.summary || {};
+  const totalCount = summary.count ?? summary.total_count ?? 0;
+  const indicatorCount = summary.indicators ?? summary.indicator_count ?? 0;
+
+  // 指标顺序说明
+  const orderNames = [
+    { name: '总 PPI', label: '总 PPI', tip: PPI_INDICATOR_TOOLTIPS['总 PPI'] },
+    { name: '生产资料PPI', label: '生产资料', tip: PPI_INDICATOR_TOOLTIPS['生产资料PPI'] },
+    { name: '生活资料PPI', label: '生活资料', tip: PPI_INDICATOR_TOOLTIPS['生活资料PPI'] },
+  ];
+
+  let html = '<div class="order-legend">';
+  orderNames.forEach((item, idx) => {
+    const color = getPpiColor(idx);
+    html += `
+      <div class="order-tooltip-item">
+        <span class="order-dot" style="background:${color}"></span>
+        <span class="order-label">${item.label}</span>
+        <span class="tooltip-icon" data-ppi-tip-idx="${idx}">ⓘ</span>
+      </div>
+    `;
+  });
+  html += '</div>';
+
+  html += `
+    <div class="overview-card" style="border-left-color: #e63946;">
+      <div class="indicator-name">总览</div>
+      <div class="value" style="font-size:1.1rem;">${totalCount} 条</div>
+      <div class="meta">${indicatorCount} 个指标 · ${summary.date_range || 'N/A'}</div>
+    </div>
+  `;
+
+  const sortedLatest = sortByPpiOrder(latest, 'indicator');
+  for (const item of sortedLatest) {
+    const shortName = ppiNormName(item.indicator);
+    const trendIcon = item.trend === 'up' ? '📈' : item.trend === 'down' ? '📉' : '➡️';
+    const changeStr = item.latest_change !== null && item.latest_change !== undefined
+      ? `(${item.latest_change >= 0 ? '+' : ''}${item.latest_change.toFixed(2)})`
+      : '';
+    const valColor = item.trend === 'up' ? 'var(--danger)' : item.trend === 'down' ? 'var(--success)' : 'inherit';
+
+    const displayVal = cpiToGrowth(item.value);
+    const valStr = displayVal !== null
+      ? (displayVal >= 0 ? '+' : '') + displayVal.toFixed(1) + '%'
+      : 'N/A';
+    html += `
+      <div class="overview-card">
+        <div class="indicator-name">${trendIcon} ${escapeHtml(shortName)}</div>
+        <div class="value" style="color:${valColor}">${valStr}</div>
+        <div class="meta">
+          <span>${item.date || ''}</span>
+          <span class="trend-${item.trend || 'stable'}">${changeStr}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  ppiOverviewGrid.innerHTML = html;
+}
+
+function renderPpiChart(res) {
+  const chartData = res && res.data;
+  if (!chartData || !chartData.labels || !chartData.labels.length) {
+    ppiChart.style.display = 'none';
+    document.getElementById('ppi-chart-empty').style.display = 'block';
+    return;
+  }
+
+  ppiChart.style.display = 'block';
+  document.getElementById('ppi-chart-empty').style.display = 'none';
+
+  const shortDatasets = (chartData.datasets || []).map(ds => ({
+    ...ds,
+    label: ppiNormName(ds.label),
+  }));
+
+  const sortedDatasets = sortByPpiOrder(shortDatasets, 'label');
+
+  // 同比指数 → 增速
+  const transformedData = {
+    labels: chartData.labels,
+    datasets: sortedDatasets.map(ds => ({
+      ...ds,
+      data: ds.data.map(v => v !== null && v !== undefined ? v - 100 : null),
+    })),
+  };
+
+  renderLineChart(ppiChart, transformedData, 'ppi-chart-legend');
+}
+
+/* ══════════════════════════════════════════════════════
+   货币供应量渲染函数
+   ══════════════════════════════════════════════════════ */
+
+async function loadMsIndicators() {
+  try {
+    const res = await fetchMsIndicators();
+    msState.indicators = res.data || [];
+    msState.groups = res.groups || [];
+  } catch (e) {
+    console.error('加载货币供应量指标列表失败:', e);
+  }
+}
+
+async function refreshMs() {
+  msYoyTbody.innerHTML = '<tr><td colspan="4" class="loading-row">🔄 加载中...</td></tr>';
+  msAbsoluteGrid.innerHTML = '<div class="loading">🔄 加载中...</div>';
+
+  const currentPeriod = getCurrentMsPeriod();
+  const params = { period: currentPeriod };
+
+  try {
+    // 并行加载概览、图表、yoy表格、绝对值数据
+    const [overviewRes, chartRes, yoyRes] = await Promise.all([
+      fetchMsOverview(params).catch(() => null),
+      fetchMsChart({ ...params, indicator: '同比增长' }).catch(() => null),
+      fetchMsYoy(params).catch(() => null),
+    ]);
+
+    // 渲染 KPI
+    renderMsKpiCards(overviewRes);
+
+    // 渲染图表（同比增长走势）
+    renderMsChart(chartRes);
+
+    // 渲染 YoY 表格
+    msState.yoyData = (yoyRes && yoyRes.data) || [];
+    renderMsYoyTable(msState.yoyData);
+
+    // 渲染绝对值
+    await renderMsAbsoluteGrid(currentPeriod);
+
+    lastUpdate.textContent = `已更新 ${formatTime(new Date())}`;
+
+  } catch (e) {
+    console.error('刷新货币供应量数据失败:', e);
+    msYoyTbody.innerHTML = `<tr><td colspan="4" class="loading-row">❌ 加载失败: ${e.message}</td></tr>`;
+  }
+}
+
+function renderMsKpiCards(res) {
+  if (!res || !res.data) return;
+
+  const latest = res.data.latest || [];
+  const summary = res.data.summary || {};
+  const totalCount = summary.count ?? res.data.total_count ?? 0;
+  const indicatorCount = summary.indicators ?? res.data.indicator_count ?? 0;
+
+  if (msKpiTotal) msKpiTotal.textContent = totalCount.toLocaleString();
+  if (msKpiIndicators) msKpiIndicators.textContent = indicatorCount + ' 项';
+  if (msKpiTimespan) msKpiTimespan.textContent = summary.date_range || '--';
+
+  // 最新 M2 同比
+  if (msKpiLatestM2 && latest.length > 0) {
+    // 找 M2 同比增长
+    const m2yoy = latest.find(l => l.indicator && l.indicator.includes('M2') && l.indicator.includes('同比'));
+    if (m2yoy) {
+      const val = m2yoy.value !== null && m2yoy.value !== undefined ? m2yoy.value : null;
+      msKpiLatestM2.textContent = val !== null ? val.toFixed(1) + '%' : '--';
+      if (msM2Change) {
+        msM2Change.textContent = `最新 ${m2yoy.date || ''}`;
+      }
+    } else {
+      msKpiLatestM2.textContent = '--';
+    }
+  }
+}
+
+function renderMsChart(res) {
+  const chartData = res && res.data;
+  if (!chartData || !chartData.labels || !chartData.labels.length) {
+    if (msChart) msChart.style.display = 'none';
+    const emptyEl = document.getElementById('ms-chart-empty');
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+
+  if (msChart) msChart.style.display = 'block';
+  const emptyEl = document.getElementById('ms-chart-empty');
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // 数据处理：已经是增速值，直接使用
+  // 构建短名映射 + tooltip 数据属性
+  const msShortNames = {
+    '货币和准货币 (M2) 供应量_同比增长 (%)': 'M2',
+    '货币 (M1) 供应量_同比增长 (%)': 'M1',
+    '流通中现金 (M0) 供应量_同比增长 (%)': 'M0',
+  };
+
+  const transformedData = {
+    labels: chartData.labels,
+    datasets: (chartData.datasets || []).map((ds, i) => ({
+      ...ds,
+      label: msShortNames[ds.label] || ds.label.replace(/_/g, ' '),
+      _msKey: msShortNames[ds.label] || '',  // 用于 tooltip 查找
+    })),
+  };
+
+  renderLineChart(msChart, transformedData, 'ms-chart-legend');
+
+  // 替换图例中的 tooltip 数据属性为 ms-tip
+  const legendEl = document.getElementById('ms-chart-legend');
+  if (legendEl) {
+    const tips = legendEl.querySelectorAll('.legend-tip');
+    tips.forEach(tip => {
+      const idx = parseInt(tip.dataset.tipIdx, 10);
+      if (!isNaN(idx) && idx < transformedData.datasets.length) {
+        const msKey = transformedData.datasets[idx]._msKey;
+        if (msKey) {
+          delete tip.dataset.tipIdx;
+          tip.dataset.msTip = msKey;
+        }
+      }
+    });
+  }
+}
+
+function renderMsYoyTable(yoyData) {
+  if (!yoyData || !yoyData.length) {
+    msYoyTbody.innerHTML = '<tr><td colspan="4" class="loading-row">📭 暂无数据</td></tr>';
+    return;
+  }
+
+  // 只显示最近 N 条（默认显示全部，但取反序让最新在顶）
+  const displayData = [...yoyData].reverse();
+
+  let html = '';
+  for (const row of displayData) {
+    const m2 = row.M2_同比增长 !== undefined ? row.M2_同比增长.toFixed(1) : '--';
+    const m1 = row.M1_同比增长 !== undefined ? row.M1_同比增长.toFixed(1) : '--';
+    const m0 = row.M0_同比增长 !== undefined ? row.M0_同比增长.toFixed(1) : '--';
+
+    const m2Class = row.M2_同比增长 >= 0 ? 'positive-val' : 'negative-val';
+    const m1Class = row.M1_同比增长 >= 0 ? 'positive-val' : 'negative-val';
+    const m0Class = row.M0_同比增长 >= 0 ? 'positive-val' : 'negative-val';
+
+    html += `
+      <tr>
+        <td>${escapeHtml(row.date)}</td>
+        <td class="${m2Class}">${m2}%</td>
+        <td class="${m1Class}">${m1}%</td>
+        <td class="${m0Class}">${m0}%</td>
+      </tr>
+    `;
+  }
+
+  msYoyTbody.innerHTML = html;
+}
+
+async function renderMsAbsoluteGrid(currentPeriod) {
+  try {
+    // 拿最新一个月的期末值数据
+    const params = { period: currentPeriod, group: '期末值' };
+    const dataRes = await fetchMsData(params);
+    const data = (dataRes && dataRes.data) || [];
+
+    if (!data.length) {
+      msAbsoluteGrid.innerHTML = '<div class="loading">📭 暂无数据</div>';
+      return;
+    }
+
+    // 按日期分组，取最新的
+    const byDate = {};
+    for (const d of data) {
+      if (!byDate[d.date] || d.date > byDate[d.date].date) {
+        byDate[d.date] = d;
+      }
+    }
+
+    // 取最新日期
+    const dates = Object.keys(byDate).sort();
+    const latestDate = dates[dates.length - 1];
+    const latestItems = data.filter(d => d.date === latestDate);
+
+    // 按 M2、M1、M0 排序
+    const orderMap = { 'M2': 0, 'M1': 1, 'M0': 2 };
+    latestItems.sort((a, b) => {
+      const aKey = Object.keys(orderMap).find(k => a.indicator.includes(k)) || '';
+      const bKey = Object.keys(orderMap).find(k => b.indicator.includes(k)) || '';
+      return (orderMap[aKey] ?? 99) - (orderMap[bKey] ?? 99);
+    });
+
+    let html = `<div class="overview-card" style="border-left-color: var(--primary-dark);">
+      <div class="indicator-name">${latestDate}</div>
+      <div class="value" style="font-size:1.1rem;">${latestItems.length} 项</div>
+      <div class="meta">货币供应量期末值</div>
+    </div>`;
+
+    for (const item of latestItems) {
+      const val = item.value !== null && item.value !== undefined
+        ? Number(item.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : 'N/A';
+      const shortName = item.indicator.replace(/\s*\(.*?\)\s*/g, '').trim();
+      html += `
+        <div class="overview-card">
+          <div class="indicator-name">💰 ${escapeHtml(shortName)}</div>
+          <div class="value" style="font-size:1rem;">${val}</div>
+          <div class="meta">${item.unit || '亿元'}</div>
+        </div>
+      `;
+    }
+
+    msAbsoluteGrid.innerHTML = html;
+  } catch (e) {
+    console.error('加载货币供应量绝对值失败:', e);
+    msAbsoluteGrid.innerHTML = `<div class="loading">❌ 加载失败: ${e.message}</div>`;
+  }
+}
+
+/* ── 货币供应量时间段辅助 ──────────────────────── */
+
+function getCurrentMsPeriod() {
+  const s = msPeriodStart ? msPeriodStart.value.trim() : '';
+  const e = msPeriodEnd ? msPeriodEnd.value.trim() : '';
+  if (s && e) return `${s}-${e}`;
+  return '200001-202606';
+}
+
+function initMsDefaultPeriod() {
+  if (msPeriodStart) msPeriodStart.value = '200001';
+  if (msPeriodEnd) msPeriodEnd.value = getLatestMsMonth();
+  msState.selectedPeriod = `${msPeriodStart ? msPeriodStart.value : '200001'}-${msPeriodEnd ? msPeriodEnd.value : '202606'}`;
+}
+
+function getLatestMsMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
 
 /* ══════════════════════════════════════════════════════
    页面切换
@@ -320,10 +808,23 @@ function switchSection(sectionId) {
   const nameMap = {
     dashboard: '仪表盘总览',
     cpi: 'CPI 消费价格指数',
+    ppi: 'PPI 生产价格指数',
+    'money-supply': '货币供应量',
     analysis: '深度分析',
     settings: '数据设置',
   };
   toolbarTitle.textContent = nameMap[sectionId] || sectionId;
+
+  // 切换时自动加载对应数据
+  if (sectionId === 'ppi' && ppiState.indicators.length > 0) {
+    initPpiDefaultPeriod();
+    refreshPpi();
+  }
+
+  if (sectionId === 'money-supply') {
+    initMsDefaultPeriod();
+    refreshMs();
+  }
 
   // 在小屏幕上关闭侧边栏
   if (window.innerWidth <= 768) {
@@ -405,6 +906,22 @@ const CPI_NAME_MAP = {
   '其他用品及服务类居民消费价格指数 (上年同月=100)': '其他',
   '其他用品及服务类居民消费价格指数(上年同月=100)': '其他',
 };
+
+/* ── PPI 指标名称归一化 ──────────────────────────── */
+
+/** 全量名称 → 短名映射 */
+const PPI_NAME_MAP = {
+  '工业生产者出厂价格指数 (上年同月=100)': '总 PPI',
+  '生产资料工业生产者出厂价格指数 (上年同月=100)': '生产资料PPI',
+  '生活资料工业生产者出厂价格指数 (上年同月=100)': '生活资料PPI',
+};
+
+/**
+ * 将 PPI 指标全名归一化为短名。
+ */
+function ppiNormName(fullName) {
+  return PPI_NAME_MAP[fullName] || fullName;
+}
 
 /**
  * 将 CPI 指标全名归一化为短名。
@@ -498,6 +1015,59 @@ const INDICATOR_TOOLTIPS = {
     importance: '品类分散，几乎不影响整体 CPI，常规分析可忽略。',
   },
 };
+
+/* ── PPI 指标 Tooltip 说明 ──────────────────────── */
+
+const PPI_INDICATOR_TOOLTIPS = {
+  '总 PPI': {
+    meaning: '全部工业品出厂价格综合指数，大家口中标准 PPI。',
+    importance: '核心工业通胀指标，和 CPI 搭配判断工业冷热、通缩 / 通胀，是政策与市场分析的基准。',
+  },
+  '生产资料PPI': {
+    meaning: '原油、煤炭、钢铁、化工等上游原料、中间工业品，占 PPI 权重 80%。',
+    importance: '主导总 PPI 涨跌，跟踪国际大宗商品、基建地产周期，涨跌直接影响工厂原材料成本与利润。',
+  },
+  '生活资料PPI': {
+    meaning: '家电、加工食品、服装等卖给居民的工业消费品，占 PPI 权重 20%。',
+    importance: '判断上游成本能否传导到终端消费，走势可提前预判 CPI 商品端物价变化。',
+  },
+};
+
+/* ── 货币供应量指标 Tooltip 说明 ──────────────── */
+
+const MS_TOOLTIPS = {
+  'M0': {
+    meaning: '市面上所有纸币、硬币（手里的现金）。',
+    represents: '线下现金消费。',
+    importance: '参考价值最低，波动基本是节假日导致，不判断经济大势。',
+  },
+  'M1': {
+    meaning: 'M0 + 企业活期、个人活期（随时能花的钱）。',
+    represents: '真实经济活力、企业生意好坏。',
+    importance: 'M1上涨=企业敢接单、敢投资、经济回暖；M1低迷=企业观望、市场冷清。',
+  },
+  'M2': {
+    meaning: 'M1 + 定期存款、储蓄、理财等所有沉淀资金（全社会所有钱）。',
+    represents: '市场货币总量、货币政策松紧。',
+    importance: 'M2涨=放水、宽松；M2跌=收紧、缺钱。是判断宏观流动性的核心指标。',
+  },
+};
+
+/* ── 指标排序（总PPI → 两大分项） ──────────────── */
+
+/** PPI 全名顺序 */
+const PPI_INDICATOR_ORDER = [
+  '工业生产者出厂价格指数 (上年同月=100)',
+  '生产资料工业生产者出厂价格指数 (上年同月=100)',
+  '生活资料工业生产者出厂价格指数 (上年同月=100)',
+];
+
+/** PPI 短名顺序 */
+const PPI_INDICATOR_ORDER_SHORT = [
+  '总 PPI',
+  '生产资料PPI',
+  '生活资料PPI',
+];
 
 /* ── 指标排序（总CPI → 核心CPI → 八大标准分项） ──── */
 
@@ -641,8 +1211,16 @@ function bindEvents() {
     }
   });
 
-  // 刷新
-  refreshBtn.addEventListener('click', refreshAll);
+  // 刷新（根据当前页面类型）
+  refreshBtn.addEventListener('click', () => {
+    if (state.currentSection === 'ppi') {
+      refreshPpi();
+    } else if (state.currentSection === 'money-supply') {
+      refreshMs();
+    } else {
+      refreshAll();
+    }
+  });
 
   // 时间段输入（起始/结束，回车或失焦触发）
   [periodStart, periodEnd].forEach(input => {
@@ -662,13 +1240,17 @@ function bindEvents() {
   periodPresetBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const months = parseInt(btn.dataset.months, 10);
-      if (isNaN(months)) return;
-      // 计算预设时间段
-      const endYM = getLatestMonth();
-      const startYM = subtractMonths(endYM, months - 1);
-      if (periodStart) periodStart.value = startYM;
-      if (periodEnd) periodEnd.value = endYM;
-      // 高亮当前按钮
+      const isAll = btn.dataset.all === '1';
+      if (isAll) {
+        // 全部数据
+        if (periodStart) periodStart.value = '200001';
+        if (periodEnd) periodEnd.value = getLatestMonth();
+      } else if (!isNaN(months)) {
+        const endYM = getLatestMonth();
+        const startYM = subtractMonths(endYM, months - 1);
+        if (periodStart) periodStart.value = startYM;
+        if (periodEnd) periodEnd.value = endYM;
+      }
       periodPresetBtns.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       refreshAll();
@@ -717,6 +1299,122 @@ function bindEvents() {
       }
     });
   }
+
+  // ═══ PPI 事件绑定 ═══════════════════════════════
+
+  // PPI 时间段输入
+  [ppiPeriodStart, ppiPeriodEnd].forEach(input => {
+    if (!input) return;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        refreshPpi();
+      }
+    });
+    input.addEventListener('blur', () => {
+      refreshPpi();
+    });
+  });
+
+  // PPI 预设时间段按钮
+  ppiPeriodPresetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const months = parseInt(btn.dataset.months, 10);
+      const isAll = btn.dataset.all === '1';
+      if (isAll) {
+        if (ppiPeriodStart) ppiPeriodStart.value = '200001';
+        if (ppiPeriodEnd) ppiPeriodEnd.value = getLatestPpiMonth();
+      } else if (!isNaN(months)) {
+        const endYM = getLatestPpiMonth();
+        const startYM = subtractMonths(endYM, months - 1);
+        if (ppiPeriodStart) ppiPeriodStart.value = startYM;
+        if (ppiPeriodEnd) ppiPeriodEnd.value = endYM;
+      }
+      ppiPeriodPresetBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      refreshPpi();
+    });
+  });
+
+  // PPI 图表指标下拉按钮
+  if (ppiChartIndicatorBtn) {
+    ppiChartIndicatorBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      ppiChartIndicatorDropdown.classList.toggle('open');
+    });
+  }
+
+  // 点击外部关闭 PPI 下拉
+  document.addEventListener('click', (e) => {
+    if (ppiChartIndicatorDropdown &&
+        ppiChartIndicatorDropdown.classList.contains('open') &&
+        !ppiChartIndicatorDropdown.contains(e.target) &&
+        e.target !== ppiChartIndicatorBtn) {
+      ppiChartIndicatorDropdown.classList.remove('open');
+    }
+  });
+
+  // PPI 全选
+  if (ppiChartCheckall) {
+    ppiChartCheckall.addEventListener('change', () => {
+      const checked = ppiChartCheckall.checked;
+      ppiChartIndicatorList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = checked;
+      });
+      syncPpiChartSelectedIndicators();
+      refreshPpi();
+    });
+  }
+
+  // PPI 图表指标列表事件（委托）
+  if (ppiChartIndicatorList) {
+    ppiChartIndicatorList.addEventListener('change', (e) => {
+      if (e.target.type === 'checkbox' && e.target.id !== 'ppi-chart-checkall') {
+        syncPpiChartSelectedIndicators();
+        refreshPpi();
+      }
+    });
+  }
+
+  // ═══ 货币供应量事件绑定 ══════════════════════════
+
+  // MS 时间段输入
+  [msPeriodStart, msPeriodEnd].forEach(input => {
+    if (!input) return;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        refreshMs();
+      }
+    });
+    input.addEventListener('blur', () => {
+      refreshMs();
+    });
+  });
+
+  // MS 预设时间段按钮
+  msPeriodPresetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const months = parseInt(btn.dataset.months, 10);
+      const isAll = btn.dataset.all === '1';
+      if (isAll) {
+        // 全部数据
+        if (msPeriodStart) msPeriodStart.value = '200001';
+        if (msPeriodEnd) msPeriodEnd.value = getLatestMsMonth();
+      } else if (!isNaN(months)) {
+        const endYM = getLatestMsMonth();
+        const startYM = subtractMonths(endYM, months - 1);
+        if (msPeriodStart) msPeriodStart.value = startYM;
+        if (msPeriodEnd) msPeriodEnd.value = endYM;
+      }
+      msPeriodPresetBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      refreshMs();
+    });
+  });
+
+  // ═══ PPI 悬浮 Tooltip ═══
+  initPpiFloatingTooltip();
 
   // ═══ 悬浮 Tooltip（委托，不受 overflow 影响） ═══
   initFloatingTooltip();
@@ -877,6 +1575,174 @@ function syncChartSelectedIndicators() {
   }
 }
 
+/* ══════════════════════════════════════════════════════
+   PPI 图表指标多选
+   ══════════════════════════════════════════════════════ */
+
+/**
+ * 同步 PPI 选中状态
+ */
+function syncPpiChartSelectedIndicators() {
+  const checked = [];
+  ppiChartIndicatorList.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+    checked.push(cb.value);
+  });
+  ppiState.chartSelectedIndicators = checked;
+  const totalCheckboxes = ppiChartIndicatorList.querySelectorAll('input[type="checkbox"]').length;
+  ppiState.chartIndicatorAllSelected = checked.length === totalCheckboxes;
+  if (ppiChartCheckall) {
+    ppiChartCheckall.checked = ppiState.chartIndicatorAllSelected;
+  }
+}
+
+/**
+ * 构建 PPI 图表指标多选列表
+ */
+function buildPpiChartIndicatorList() {
+  if (!ppiChartIndicatorList) return;
+
+  const indicators = ppiState.indicators;
+  if (!indicators.length) {
+    ppiChartIndicatorList.innerHTML = '<div class="dropdown-loading">暂无指标</div>';
+    return;
+  }
+
+  // 默认只选中总 PPI
+  ppiState.chartSelectedIndicators = indicators
+    .filter(ind => ind.group === '总PPI')
+    .map(ind => ind.name);
+  ppiState.chartIndicatorAllSelected = false;
+
+  const groupLabels = { '总PPI': '总 PPI', '两大分项': '两大分项' };
+
+  const groupMap = {};
+  for (const ind of indicators) {
+    const g = ind.group || '其他';
+    if (!groupMap[g]) groupMap[g] = [];
+    groupMap[g].push(ind);
+  }
+
+  let colorIndex = 0;
+  let html = '';
+  for (const gName of ['总PPI', '两大分项']) {
+    const items = groupMap[gName];
+    if (!items || !items.length) continue;
+
+    html += `<div class="dropdown-group-label">${groupLabels[gName] || gName}</div>`;
+
+    for (const ind of items) {
+      const checked = ppiState.chartSelectedIndicators.includes(ind.name) ? 'checked' : '';
+      const disabled = !ind.has_data ? 'disabled' : '';
+      const note = !ind.has_data ? ' (无数据)' : '';
+      html += `
+        <label class="dropdown-item ${disabled}">
+          <input type="checkbox" value="${escapeHtml(ind.name)}" ${checked} ${disabled}>
+          <span class="item-color-dot" style="background:${getPpiColor(colorIndex)}"></span>
+          <span class="item-name">${escapeHtml(ind.name)}${note}</span>
+        </label>
+      `;
+      colorIndex++;
+    }
+  }
+
+  ppiChartIndicatorList.innerHTML = html;
+
+  if (ppiChartCheckall) {
+    ppiChartCheckall.checked = ppiState.chartIndicatorAllSelected;
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   PPI 时间段辅助
+   ══════════════════════════════════════════════════════ */
+
+/**
+ * 获取 PPI 最新数据月份
+ */
+function getLatestPpiMonth() {
+  if (ppiState.allData && ppiState.allData.length > 0) {
+    const dates = ppiState.allData.map(d => d.date).filter(Boolean).sort();
+    if (dates.length > 0) {
+      return dates[dates.length - 1].replace('-', '');
+    }
+  }
+  const now = new Date();
+  return `${now.getFullYear()}${String(now.getMonth()).padStart(2, '0')}`;
+}
+
+/**
+ * 货币供应量悬浮 Tooltip 内容
+ */
+function getMsTooltipContent(key) {
+  const tip = MS_TOOLTIPS[key];
+  if (!tip) return '';
+  return `
+    <div class="tooltip-line"><b>含义：</b>${escapeHtml(tip.meaning)}</div>
+    <div class="tooltip-line"><b>代表什么：</b>${escapeHtml(tip.represents)}</div>
+    <div class="tooltip-line"><b>重要性：</b>${escapeHtml(tip.importance)}</div>
+  `;
+}
+
+/**
+ * PPI 悬浮 Tooltip（body 层级）
+ */
+function getPpiTooltipContent(idx) {
+  const tooltipData = [
+    { name: '总 PPI', tip: PPI_INDICATOR_TOOLTIPS['总 PPI'] },
+    { name: '生产资料PPI', tip: PPI_INDICATOR_TOOLTIPS['生产资料PPI'] },
+    { name: '生活资料PPI', tip: PPI_INDICATOR_TOOLTIPS['生活资料PPI'] },
+  ];
+  const data = tooltipData[idx];
+  if (!data || !data.tip) return '';
+  return `
+    <div class="tooltip-line"><b>含义：</b>${escapeHtml(data.tip.meaning)}</div>
+    <div class="tooltip-line"><b>重要性：</b>${escapeHtml(data.tip.importance)}</div>
+  `;
+}
+
+function initPpiFloatingTooltip() {
+  const tooltipEl = document.getElementById('global-tooltip');
+  if (!tooltipEl) return;
+
+  let activeIcon = null;
+
+  document.addEventListener('mouseenter', (e) => {
+    const target = e.target;
+    const icon = target instanceof Element ? target.closest('[data-ppi-tip-idx]') : null;
+    if (!icon || icon === activeIcon) return;
+    activeIcon = icon;
+
+    const idx = parseInt(icon.dataset.ppiTipIdx, 10);
+    if (isNaN(idx)) return;
+    const content = getPpiTooltipContent(idx);
+    if (!content) return;
+
+    tooltipEl.querySelector('.global-tooltip-body').innerHTML = content;
+
+    const rect = icon.getBoundingClientRect();
+    const tipW = 300;
+    let left = rect.left + rect.width / 2 - tipW / 2;
+    if (left < 10) left = 10;
+    if (left + tipW > window.innerWidth - 10) left = window.innerWidth - tipW - 10;
+
+    tooltipEl.style.left = left + 'px';
+    tooltipEl.style.top = (rect.top - 10) + 'px';
+    tooltipEl.style.display = 'block';
+  }, true);
+
+  document.addEventListener('mouseleave', (e) => {
+    const target = e.target;
+    const icon = target instanceof Element ? target.closest('[data-ppi-tip-idx]') : null;
+    if (icon && icon === activeIcon) {
+      activeIcon = null;
+      tooltipEl.style.display = 'none';
+    }
+  }, true);
+
+  tooltipEl.addEventListener('mouseenter', () => { tooltipEl.style.display = 'block'; });
+  tooltipEl.addEventListener('mouseleave', () => { activeIcon = null; tooltipEl.style.display = 'none'; });
+}
+
 /**
  * 图表指标颜色（与 charts.js 的 COLORS 调色板同步）
  */
@@ -887,6 +1753,42 @@ function getIndicatorColor(index) {
     '#F4A261', '#264653', '#E5989B', '#5E548E',
   ];
   return colors[index % colors.length];
+}
+
+function getPpiColor(index) {
+  const colors = ['#E63946', '#1D3557', '#2A9D8F'];
+  return colors[index % colors.length];
+}
+
+/**
+ * PPI 指标排序映射表
+ */
+function buildPpiOrderMap() {
+  const map = new Map();
+  PPI_INDICATOR_ORDER_SHORT.forEach((shortName, i) => {
+    const fullName = PPI_INDICATOR_ORDER[i];
+    if (!map.has(shortName)) map.set(shortName, i);
+    if (fullName && !map.has(fullName)) map.set(fullName, i);
+  });
+  return map;
+}
+
+const _PPI_ORDER_MAP = buildPpiOrderMap();
+
+/**
+ * 按 PPI 预设顺序排序
+ */
+function sortByPpiOrder(items, keyField = 'indicator') {
+  function getOrder(item) {
+    const name = item[keyField] || '';
+    if (_PPI_ORDER_MAP.has(name)) return _PPI_ORDER_MAP.get(name);
+    const stripped = name.replace(/\(.*?\)/g, '').trim();
+    for (const [key, rank] of _PPI_ORDER_MAP) {
+      if (key.replace(/\(.*?\)/g, '').trim() === stripped) return rank;
+    }
+    return 999;
+  }
+  return [...items].sort((a, b) => getOrder(a) - getOrder(b));
 }
 
 async function loadChartOnly() {
@@ -915,6 +1817,16 @@ function getCurrentPeriod() {
   const e = periodEnd ? periodEnd.value.trim() : '';
   if (s && e) return `${s}-${e}`;
   return '202406-202605';
+}
+
+/**
+ * 获取 PPI 输入框中的时间段
+ */
+function getCurrentPpiPeriod() {
+  const s = ppiPeriodStart ? ppiPeriodStart.value.trim() : '';
+  const e = ppiPeriodEnd ? ppiPeriodEnd.value.trim() : '';
+  if (s && e) return `${s}-${e}`;
+  return '202506-202606';
 }
 
 /**
@@ -1010,9 +1922,18 @@ function initFloatingTooltip() {
     if (!icon || icon === activeIcon) return;
     activeIcon = icon;
 
-    const idx = parseInt(icon.dataset.tipIdx, 10);
-    if (isNaN(idx)) return;
-    const content = getTooltipContent(idx);
+    // 判断 tooltip 类型
+    const tipIdx = icon.dataset.tipIdx;       // CPI chart
+    const msTip = icon.dataset.msTip;          // MS chart
+
+    let content = '';
+    if (tipIdx !== undefined) {
+      const idx = parseInt(tipIdx, 10);
+      if (!isNaN(idx)) content = getTooltipContent(idx);
+    } else if (msTip !== undefined) {
+      content = getMsTooltipContent(msTip);
+    }
+
     if (!content) return;
 
     tooltipEl.querySelector('.global-tooltip-body').innerHTML = content;
@@ -1052,10 +1973,18 @@ function initFloatingTooltip() {
 
 function initDefaultPeriod() {
   const endYM = getLatestMonth();
-  const startYM = subtractMonths(endYM, 11); // 12个月 - 1
+  const startYM = subtractMonths(endYM, 11);
   if (periodStart) periodStart.value = startYM;
   if (periodEnd) periodEnd.value = endYM;
   state.selectedPeriod = `${startYM}-${endYM}`;
+}
+
+function initPpiDefaultPeriod() {
+  const endYM = getLatestPpiMonth();
+  const startYM = subtractMonths(endYM, 11);
+  if (ppiPeriodStart) ppiPeriodStart.value = startYM;
+  if (ppiPeriodEnd) ppiPeriodEnd.value = endYM;
+  ppiState.selectedPeriod = `${startYM}-${endYM}`;
 }
 
 /* 暴露 switchSection 给全局，用于 HTML 中的 onclick */

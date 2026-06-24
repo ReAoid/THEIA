@@ -21,6 +21,8 @@ from flask import Flask, send_from_directory, jsonify
 from config import WEB_HOST, WEB_PORT, WEB_DEBUG
 
 from presentation.api import api_bp
+from presentation.ppi_api import ppi_api_bp
+from presentation.money_supply_api import money_supply_api_bp
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ def create_app(api_only: bool = False, client_dir: str | Path | None = None) -> 
 
     # 注册 API Blueprint
     app.register_blueprint(api_bp)
+    app.register_blueprint(ppi_api_bp)
+    app.register_blueprint(money_supply_api_bp)
 
     if not api_only:
         _serve_client(app, client_dir or CLIENT_DIR)
@@ -119,10 +123,12 @@ def main():
     app = create_app(api_only=args.api_only, client_dir=args.client_dir)
 
     print(f"\n{'=' * 50}")
-    print(f"  THEIA CPI 数据服务")
-    print(f"  API:     http://{args.host}:{args.port}/api/v1/")
+    print(f"  THEIA 经济数据服务")
+    print(f"  CPI:     http://{args.host}:{args.port}/api/v1/cpi/")
+    print(f"  PPI:     http://{args.host}:{args.port}/api/v1/ppi/")
+    print(f"  货币供应量: http://{args.host}:{args.port}/api/v1/money-supply/")
     if not args.api_only:
-        print(f"  Frontend: http://{args.host}:{args.port}/")
+        print(f"  前端:    http://{args.host}:{args.port}/")
     print(f"{'=' * 50}\n")
 
     app.run(host=args.host, port=args.port, debug=args.debug)

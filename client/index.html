@@ -29,6 +29,18 @@
             <span class="nav-label">CPI 消费价格</span>
           </a>
         </li>
+        <li>
+          <a href="#" class="nav-link" data-section="ppi">
+            <span class="nav-icon">🏭</span>
+            <span class="nav-label">PPI 生产价格</span>
+          </a>
+        </li>
+        <li>
+          <a href="#" class="nav-link" data-section="money-supply">
+            <span class="nav-icon">💰</span>
+            <span class="nav-label">货币供应量</span>
+          </a>
+        </li>
         <li class="nav-divider"></li>
         <li>
           <a href="#" class="nav-link" data-section="analysis">
@@ -51,7 +63,7 @@
         <span class="status-dot"></span>
         <span class="status-text">数据已同步</span>
       </div>
-      <span class="sidebar-version">v1.2.0</span>
+      <span class="sidebar-version">v1.3.0</span>
     </div>
   </aside>
 
@@ -78,10 +90,126 @@
         <div class="empty-page-state">
           <div class="empty-page-icon">📊</div>
           <h3>欢迎使用 THEIA 经济数据平台</h3>
-          <p>本平台提供居民消费价格指数（CPI）数据的查询、分析和可视化服务。</p>
+          <p>本平台提供居民消费价格指数（CPI）和工业生产者出厂价格指数（PPI）数据的查询、分析和可视化服务。</p>
           <div class="empty-page-actions">
             <a href="#" class="btn btn-primary" onclick="switchSection('cpi')">🏛️ 进入 CPI 消费价格 →</a>
+            <a href="#" class="btn btn-outline" onclick="switchSection('ppi')" style="margin-left:8px;">🏭 进入 PPI 生产价格 →</a>
+            <a href="#" class="btn btn-outline" onclick="switchSection('money-supply')" style="margin-left:8px;">💰 进入货币供应量 →</a>
           </div>
+        </div>
+      </section>
+
+      <!-- ==================== PPI 生产价格 ==================== -->
+      <section id="section-ppi" class="page-section">
+
+        <!-- KPI 行 -->
+        <div class="kpi-row">
+          <div class="kpi-card" style="--kpi-accent: #e63946;">
+            <div class="kpi-icon">🏭</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据总量</div>
+              <div class="kpi-value" id="ppi-kpi-total">--</div>
+              <div class="kpi-change positive">↑ PPI 数据</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #1d3557;">
+            <div class="kpi-icon">🏷️</div>
+            <div class="kpi-body">
+              <div class="kpi-label">指标数量</div>
+              <div class="kpi-value" id="ppi-kpi-indicators">--</div>
+              <div class="kpi-change">总PPI + 两大分项</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #2a9d8f;">
+            <div class="kpi-icon">📈</div>
+            <div class="kpi-body">
+              <div class="kpi-label">最新 PPI</div>
+              <div class="kpi-value" id="ppi-kpi-latest-ppi">--</div>
+              <div class="kpi-change" id="ppi-ppi-change"></div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #e76f51;">
+            <div class="kpi-icon">📅</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据时间跨度</div>
+              <div class="kpi-value" id="ppi-kpi-timespan">--</div>
+              <div class="kpi-change">含当前月份</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 仪表盘网格 -->
+        <div class="dashboard-grid">
+          <!-- Widget: 走势图 -->
+          <div class="widget widget-2col">
+            <div class="widget-header">
+              <h3 class="widget-title">📊 PPI 走势图</h3>
+              <div class="widget-header-right">
+                <div class="chart-period-controls">
+                  <div class="period-range">
+                    <input type="text" class="period-input ppi-period-start" id="ppi-period-start"
+                           placeholder="YYYYMM"
+                           value="202506"
+                           maxlength="6"
+                           title="起始月份，格式：YYYYMM，如 202506">
+                    <span class="period-separator">—</span>
+                    <input type="text" class="period-input ppi-period-end" id="ppi-period-end"
+                           placeholder="YYYYMM"
+                           value="202606"
+                           maxlength="6"
+                           title="结束月份，格式：YYYYMM，如 202606">
+                  </div>
+                  <div class="period-presets">
+                    <button class="ppi-period-preset-btn" data-months="6">近6个月</button>
+                    <button class="ppi-period-preset-btn active" data-months="12">近1年</button>
+                    <button class="ppi-period-preset-btn" data-months="36">近3年</button>
+                    <button class="ppi-period-preset-btn" data-months="60">近5年</button>
+                    <button class="ppi-period-preset-btn" data-months="0" data-all="1">全部</button>
+                  </div>
+                </div>
+                <div class="chart-indicator-selector">
+                  <button class="chart-indicator-btn" id="ppi-chart-indicator-btn" title="选择要显示的指标">
+                    📌 选择指标
+                  </button>
+                  <div class="chart-indicator-dropdown" id="ppi-chart-indicator-dropdown">
+                    <div class="dropdown-header">
+                      <label class="dropdown-checkall">
+                        <input type="checkbox" id="ppi-chart-checkall" checked>
+                        <span>全选 / 取消</span>
+                      </label>
+                    </div>
+                    <div class="dropdown-list" id="ppi-chart-indicator-list">
+                      <div class="dropdown-loading">加载中...</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-tabs">
+                  <button class="chart-tab active" data-type="line">折线图</button>
+                </div>
+              </div>
+            </div>
+            <div class="widget-body chart-body">
+              <canvas id="ppi-chart" height="280"></canvas>
+              <div id="ppi-chart-empty" class="empty-state" style="display:none;">
+                <p>📭 暂无图表数据</p>
+              </div>
+              <div id="ppi-chart-legend" class="chart-legend"></div>
+            </div>
+          </div>
+
+          <!-- Widget: 概览卡片 -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📋 PPI 核心指标</h3>
+              <span class="widget-badge" id="ppi-overview-badge">最新数据</span>
+            </div>
+            <div class="widget-body">
+              <div id="ppi-overview-grid" class="overview-grid">
+                <div class="loading">加载中...</div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </section>
 
@@ -147,9 +275,10 @@
                   </div>
                   <div class="period-presets">
                     <button class="period-preset-btn" data-months="6">近6个月</button>
-                    <button class="period-preset-btn active" data-months="12">近12个月</button>
+                    <button class="period-preset-btn active" data-months="12">近1年</button>
                     <button class="period-preset-btn" data-months="36">近3年</button>
                     <button class="period-preset-btn" data-months="60">近5年</button>
+                    <button class="period-preset-btn" data-months="0" data-all="1">全部</button>
                   </div>
                 </div>
                 <div class="chart-indicator-selector">
@@ -195,6 +324,129 @@
             </div>
           </div>
 
+
+        </div>
+      </section>
+
+      <!-- ==================== 货币供应量 ==================== -->
+      <section id="section-money-supply" class="page-section">
+
+        <!-- KPI 行 -->
+        <div class="kpi-row">
+          <div class="kpi-card" style="--kpi-accent: #2a9d8f;">
+            <div class="kpi-icon">💰</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据总量</div>
+              <div class="kpi-value" id="ms-kpi-total">--</div>
+              <div class="kpi-change">M0 / M1 / M2</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #1d3557;">
+            <div class="kpi-icon">🏷️</div>
+            <div class="kpi-body">
+              <div class="kpi-label">指标数量</div>
+              <div class="kpi-value" id="ms-kpi-indicators">--</div>
+              <div class="kpi-change">期末值 + 同比增长</div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #e76f51;">
+            <div class="kpi-icon">📈</div>
+            <div class="kpi-body">
+              <div class="kpi-label">最新 M2 同比</div>
+              <div class="kpi-value" id="ms-kpi-latest-m2">--</div>
+              <div class="kpi-change" id="ms-m2-change"></div>
+            </div>
+          </div>
+          <div class="kpi-card" style="--kpi-accent: #06d6a0;">
+            <div class="kpi-icon">📅</div>
+            <div class="kpi-body">
+              <div class="kpi-label">数据时间跨度</div>
+              <div class="kpi-value" id="ms-kpi-timespan">--</div>
+              <div class="kpi-change">2000 年至今</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 仪表盘网格 -->
+        <div class="dashboard-grid">
+          <!-- Widget: M2 走势图 -->
+          <div class="widget widget-2col">
+            <div class="widget-header">
+              <h3 class="widget-title">📊 货币供应量同比增长走势</h3>
+              <div class="widget-header-right">
+                <div class="chart-period-controls">
+                  <div class="period-range">
+                    <input type="text" class="period-input ms-period-start" id="ms-period-start"
+                           placeholder="YYYYMM"
+                           value="200001"
+                           maxlength="6"
+                           title="起始月份，格式：YYYYMM，如 200001">
+                    <span class="period-separator">—</span>
+                    <input type="text" class="period-input ms-period-end" id="ms-period-end"
+                           placeholder="YYYYMM"
+                           value="202606"
+                           maxlength="6"
+                           title="结束月份，格式：YYYYMM，如 202606">
+                  </div>
+                  <div class="period-presets">
+                    <button class="ms-period-preset-btn" data-months="6">近6个月</button>
+                    <button class="ms-period-preset-btn active" data-months="12">近1年</button>
+                    <button class="ms-period-preset-btn" data-months="36">近3年</button>
+                    <button class="ms-period-preset-btn" data-months="60">近5年</button>
+                    <button class="ms-period-preset-btn" data-months="0" data-all="1">全部</button>
+                  </div>
+                </div>
+                <div class="chart-tabs">
+                  <button class="chart-tab active" data-type="line">折线图</button>
+                </div>
+              </div>
+            </div>
+            <div class="widget-body chart-body">
+              <canvas id="ms-chart" height="280"></canvas>
+              <div id="ms-chart-empty" class="empty-state" style="display:none;">
+                <p>📭 暂无图表数据</p>
+              </div>
+              <div id="ms-chart-legend" class="chart-legend"></div>
+            </div>
+          </div>
+
+          <!-- Widget: 同比增长表格（画表专用） -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📋 M0 / M1 / M2 同比增长</h3>
+              <span class="widget-badge" id="ms-overview-badge">最新数据</span>
+            </div>
+            <div class="widget-body">
+              <div class="table-wrapper">
+                <table class="data-table" id="ms-yoy-table">
+                  <thead>
+                    <tr>
+                      <th>月份</th>
+                      <th>M2 同比增长 (%)</th>
+                      <th>M1 同比增长 (%)</th>
+                      <th>M0 同比增长 (%)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ms-yoy-tbody">
+                    <tr><td colspan="4" class="loading-row">🔄 加载中...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Widget: 当期绝对值概览 -->
+          <div class="widget widget-full">
+            <div class="widget-header">
+              <h3 class="widget-title">📋 货币供应量期末值 (亿元)</h3>
+              <span class="widget-badge">最新月份</span>
+            </div>
+            <div class="widget-body">
+              <div id="ms-absolute-grid" class="overview-grid">
+                <div class="loading">加载中...</div>
+              </div>
+            </div>
+          </div>
 
         </div>
       </section>

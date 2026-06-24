@@ -104,7 +104,7 @@ class PPIManager:
         elif indicators is not None and indicators != "all":
             data = self._filter_by_indicators(data, indicators)
 
-        if period is not None and not need_fetch:
+        if period is not None:
             data = self._filter_by_period(data, period)
 
         return data

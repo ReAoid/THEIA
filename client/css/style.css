@@ -684,6 +684,29 @@ a:hover { text-decoration: underline; }
   border-color: var(--primary);
 }
 
+.ppi-period-preset-btn {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.ppi-period-preset-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.ppi-period-preset-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
 .chart-indicator-selector {
   position: relative;
 }
@@ -1042,4 +1065,98 @@ a:hover { text-decoration: underline; }
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* ══════════════════════════════════════════════════════
+   货币供应量 - 表格 & 货币供应量预设按钮
+   ══════════════════════════════════════════════════════ */
+
+/* ── 数据表格 ──────────────────────────────── */
+
+.table-wrapper {
+  overflow-x: auto;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.data-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.data-table th {
+  background: var(--sidebar-bg);
+  color: #e0e0e8;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  border-bottom: 2px solid rgba(255,255,255,0.1);
+}
+
+.data-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table tbody tr:hover {
+  background: var(--primary-bg);
+}
+
+.data-table tbody tr:nth-child(even) {
+  background: rgba(0,0,0,0.02);
+}
+
+.data-table tbody tr:nth-child(even):hover {
+  background: var(--primary-bg);
+}
+
+.loading-row {
+  text-align: center !important;
+  padding: 24px !important;
+  color: var(--text-secondary);
+}
+
+.positive-val {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.negative-val {
+  color: var(--success);
+  font-weight: 600;
+}
+
+/* ── 货币供应量预设按钮 ────────────────────── */
+
+.ms-period-preset-btn {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.ms-period-preset-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.ms-period-preset-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
 }

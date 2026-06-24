@@ -146,3 +146,75 @@ export async function fetchChart(params = {}) {
 export async function fetchGroups() {
   return apiRequest('/groups');
 }
+
+
+// ═══════════════════════════════════════════════════════
+//  货币供应量 (Money Supply) API
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 通用货币供应量请求
+ */
+async function msRequest(url, options = {}) {
+  const resp = await fetch(`${API_BASE_MS}${url}`, {
+    headers: { 'Accept': 'application/json' },
+    ...options,
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${resp.status}`);
+  }
+  const json = await resp.json();
+  if (!json.success && json.error) {
+    throw new Error(json.error);
+  }
+  return json;
+}
+
+/**
+ * 获取货币供应量总体概览
+ * GET /api/v1/money-supply/overview
+ */
+export async function fetchMsOverview(params = {}) {
+  return msRequest(`/overview${qs(params)}`);
+}
+
+/**
+ * 获取货币供应量指标列表
+ * GET /api/v1/money-supply/indicators
+ */
+export async function fetchMsIndicators() {
+  return msRequest('/indicators');
+}
+
+/**
+ * 获取货币供应量原始数据
+ * GET /api/v1/money-supply/data
+ */
+export async function fetchMsData(params = {}) {
+  return msRequest(`/data${qs(params)}`);
+}
+
+/**
+ * 获取货币供应量图表数据
+ * GET /api/v1/money-supply/chart
+ */
+export async function fetchMsChart(params = {}) {
+  return msRequest(`/chart${qs(params)}`);
+}
+
+/**
+ * 获取货币供应量分组列表
+ * GET /api/v1/money-supply/groups
+ */
+export async function fetchMsGroups() {
+  return msRequest('/groups');
+}
+
+/**
+ * 获取货币供应量同比增长数据（表格专用）
+ * GET /api/v1/money-supply/yoy
+ */
+export async function fetchMsYoy(params = {}) {
+  return msRequest(`/yoy${qs(params)}`);
+}

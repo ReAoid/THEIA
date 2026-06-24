@@ -66,6 +66,8 @@ def main() -> None:
         print(f"  前端: http://{args.host}:{args.port}/")
     print(f"{'=' * 50}\n")
 
+    print(f"  货币供应量: http://{args.host}:{args.port}/api/v1/money-supply/")
+
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 

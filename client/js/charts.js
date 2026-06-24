@@ -41,8 +41,9 @@ function getDatasetStyle(i) {
   };
 }
 
-/** 短名称映射（全量，与 app.js 的 CPI_NAME_MAP 保持一致） */
+/** 短名称映射（全量，与 app.js 的 CPI_NAME_MAP 和 PPI_NAME_MAP 保持一致） */
 const SHORT_LABELS = {
+  // ── CPI ──
   '居民消费价格指数 (上年同月=100)': '总 CPI',
   '居民消费价格指数(上年同月=100)': '总 CPI',
   '不包括食品和能源居民消费价格指数 (上年同月=100)': '核心 CPI',
@@ -65,6 +66,14 @@ const SHORT_LABELS = {
   '衣着类居民消费价格指数(上年同月=100)': '衣着',
   '其他用品及服务类居民消费价格指数 (上年同月=100)': '其他',
   '其他用品及服务类居民消费价格指数(上年同月=100)': '其他',
+  // ── PPI ──
+  '工业生产者出厂价格指数 (上年同月=100)': '总 PPI',
+  '生产资料工业生产者出厂价格指数 (上年同月=100)': '生产资料PPI',
+  '生活资料工业生产者出厂价格指数 (上年同月=100)': '生活资料PPI',
+  // ── 货币供应量 ──
+  '货币和准货币 (M2) 供应量_同比增长 (%)': 'M2',
+  '货币 (M1) 供应量_同比增长 (%)': 'M1',
+  '流通中现金 (M0) 供应量_同比增长 (%)': 'M0',
 };
 
 /** 折线图 options（共享配置，避免重复创建对象） */
@@ -121,9 +130,10 @@ function buildCustomLegend(container, datasets) {
  * 复用或创建折线图
  * @param {HTMLCanvasElement} canvas
  * @param {object} chartData - { labels, datasets }
+ * @param {string} legendId - 图例容器元素 ID（默认 'chart-legend'）
  * @returns {Chart}
  */
-function renderChart(canvas, chartData) {
+function renderChart(canvas, chartData, legendId) {
   if (!canvas || !chartData || !chartData.labels || !chartData.labels.length) return null;
 
   const options = getLineOptions();
@@ -144,9 +154,9 @@ function renderChart(canvas, chartData) {
     const chart = canvas._chart;
     chart.data.labels = chartData.labels;
     chart.data.datasets = datasets;
-    chart.update('none'); // 'none' 表示不带动画直接更新，避免闪烁
+    chart.update('none');
     // 更新图例
-    const legendContainer = document.getElementById('chart-legend');
+    const legendContainer = document.getElementById(legendId || 'chart-legend');
     if (legendContainer) buildCustomLegend(legendContainer, datasets);
     return chart;
   }
@@ -160,15 +170,18 @@ function renderChart(canvas, chartData) {
 
   canvas._chart = chart;
 
-  const legendContainer = document.getElementById('chart-legend');
+  const legendContainer = document.getElementById(legendId || 'chart-legend');
   if (legendContainer) buildCustomLegend(legendContainer, datasets);
 
   return chart;
 }
 
 /**
- * 绘制 CPI 走势图（折线图）
+ * 绘制走势图（折线图）
+ * @param {HTMLCanvasElement} canvas - 画布元素
+ * @param {object} chartData - 图表数据 { labels, datasets }
+ * @param {string} legendId - 图例容器 ID（可选，默认 'chart-legend'）
  */
-export function renderLineChart(canvas, chartData) {
-  return renderChart(canvas, chartData);
+export function renderLineChart(canvas, chartData, legendId) {
+  return renderChart(canvas, chartData, legendId);
 }

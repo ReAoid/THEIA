@@ -137,7 +137,7 @@ class CPIManager:
             data = self._filter_by_indicators(data, indicators)
 
         # 5. 按时间段过滤
-        if period is not None and not need_fetch:
+        if period is not None:
             data = self._filter_by_period(data, period)
 
         return data
