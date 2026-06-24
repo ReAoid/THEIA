@@ -1,17 +1,19 @@
 /**
- * THEIA · CPI API 客户端
+ * THEIA · API 客户端
  *
  * 封装所有与后端 API 的通信。
  * 所有函数返回 Promise<json>。
  */
 
-const API_BASE = '/api/v1/cpi';
+const API_BASE_CPI = '/api/v1/cpi';
+const API_BASE_PPI = '/api/v1/ppi';
+const API_BASE_MS = '/api/v1/money-supply';
 
 /**
  * 通用请求函数
  */
 async function apiRequest(url, options = {}) {
-  const resp = await fetch(`${API_BASE}${url}`, {
+  const resp = await fetch(`${API_BASE_CPI}${url}`, {
     headers: { 'Accept': 'application/json' },
     ...options,
   });
@@ -55,6 +57,70 @@ export async function fetchOverview(params = {}) {
  */
 export async function fetchIndicators() {
   return apiRequest('/indicators');
+}
+
+
+// ═══════════════════════════════════════════════════════
+//  PPI API
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 通用 PPI 请求
+ */
+async function ppiRequest(url, options = {}) {
+  const resp = await fetch(`${API_BASE_PPI}${url}`, {
+    headers: { 'Accept': 'application/json' },
+    ...options,
+  });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${resp.status}`);
+  }
+  const json = await resp.json();
+  if (!json.success && json.error) {
+    throw new Error(json.error);
+  }
+  return json;
+}
+
+/**
+ * 获取 PPI 总体概览
+ * GET /api/v1/ppi/overview
+ */
+export async function fetchPpiOverview(params = {}) {
+  return ppiRequest(`/overview${qs(params)}`);
+}
+
+/**
+ * 获取 PPI 指标列表
+ * GET /api/v1/ppi/indicators
+ */
+export async function fetchPpiIndicators() {
+  return ppiRequest('/indicators');
+}
+
+/**
+ * 获取 PPI 原始数据
+ * GET /api/v1/ppi/data
+ */
+export async function fetchPpiData(params = {}) {
+  return ppiRequest(`/data${qs(params)}`);
+}
+
+/**
+ * 获取 PPI 图表数据
+ * GET /api/v1/ppi/chart
+ */
+export async function fetchPpiChart(params = {}) {
+  return ppiRequest(`/chart${qs(params)}`);
+}
+
+/**
+ * 获取 PPI 分组列表
+ * GET /api/v1/ppi/groups
+ */
+export async function fetchPpiGroups() {
+  return ppiRequest('/groups');
 }
 
 /**
