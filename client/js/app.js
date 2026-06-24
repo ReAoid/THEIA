@@ -67,7 +67,6 @@ const msState = {
   groups: [],
   selectedPeriod: '200001-202606',
   allData: [],
-  yoyData: [],
 };
 
 /* ══════════════════════════════════════════════════════
@@ -563,18 +562,16 @@ async function loadMsIndicators() {
 }
 
 async function refreshMs() {
-  msYoyTbody.innerHTML = '<tr><td colspan="4" class="loading-row">🔄 加载中...</td></tr>';
   msAbsoluteGrid.innerHTML = '<div class="loading">🔄 加载中...</div>';
 
   const currentPeriod = getCurrentMsPeriod();
   const params = { period: currentPeriod };
 
   try {
-    // 并行加载概览、图表、yoy表格、绝对值数据
-    const [overviewRes, chartRes, yoyRes] = await Promise.all([
+    // 并行加载概览 + 图表 + 绝对值数据
+    const [overviewRes, chartRes] = await Promise.all([
       fetchMsOverview(params).catch(() => null),
       fetchMsChart({ ...params, indicator: '同比增长' }).catch(() => null),
-      fetchMsYoy(params).catch(() => null),
     ]);
 
     // 渲染 KPI
@@ -583,18 +580,14 @@ async function refreshMs() {
     // 渲染图表（同比增长走势）
     renderMsChart(chartRes);
 
-    // 渲染 YoY 表格
-    msState.yoyData = (yoyRes && yoyRes.data) || [];
-    renderMsYoyTable(msState.yoyData);
-
-    // 渲染绝对值
-    await renderMsAbsoluteGrid(currentPeriod);
+    // 渲染绝对值（只取最新一个月）
+    await renderMsAbsoluteGrid();
 
     lastUpdate.textContent = `已更新 ${formatTime(new Date())}`;
 
   } catch (e) {
     console.error('刷新货币供应量数据失败:', e);
-    msYoyTbody.innerHTML = `<tr><td colspan="4" class="loading-row">❌ 加载失败: ${e.message}</td></tr>`;
+    msAbsoluteGrid.innerHTML = `<div class="loading">❌ 加载失败: ${e.message}</div>`;
   }
 }
 
@@ -675,42 +668,12 @@ function renderMsChart(res) {
   }
 }
 
-function renderMsYoyTable(yoyData) {
-  if (!yoyData || !yoyData.length) {
-    msYoyTbody.innerHTML = '<tr><td colspan="4" class="loading-row">📭 暂无数据</td></tr>';
-    return;
-  }
-
-  // 只显示最近 N 条（默认显示全部，但取反序让最新在顶）
-  const displayData = [...yoyData].reverse();
-
-  let html = '';
-  for (const row of displayData) {
-    const m2 = row.M2_同比增长 !== undefined ? row.M2_同比增长.toFixed(1) : '--';
-    const m1 = row.M1_同比增长 !== undefined ? row.M1_同比增长.toFixed(1) : '--';
-    const m0 = row.M0_同比增长 !== undefined ? row.M0_同比增长.toFixed(1) : '--';
-
-    const m2Class = row.M2_同比增长 >= 0 ? 'positive-val' : 'negative-val';
-    const m1Class = row.M1_同比增长 >= 0 ? 'positive-val' : 'negative-val';
-    const m0Class = row.M0_同比增长 >= 0 ? 'positive-val' : 'negative-val';
-
-    html += `
-      <tr>
-        <td>${escapeHtml(row.date)}</td>
-        <td class="${m2Class}">${m2}%</td>
-        <td class="${m1Class}">${m1}%</td>
-        <td class="${m0Class}">${m0}%</td>
-      </tr>
-    `;
-  }
-
-  msYoyTbody.innerHTML = html;
-}
-
-async function renderMsAbsoluteGrid(currentPeriod) {
+async function renderMsAbsoluteGrid() {
   try {
-    // 拿最新一个月的期末值数据
-    const params = { period: currentPeriod, group: '期末值' };
+    // 只拉最新一个月的期末值数据
+    const latestMonth = getLatestMsMonth();
+    const period = `${latestMonth}`;
+    const params = { period, group: '期末值' };
     const dataRes = await fetchMsData(params);
     const data = (dataRes && dataRes.data) || [];
 
@@ -719,34 +682,23 @@ async function renderMsAbsoluteGrid(currentPeriod) {
       return;
     }
 
-    // 按日期分组，取最新的
-    const byDate = {};
-    for (const d of data) {
-      if (!byDate[d.date] || d.date > byDate[d.date].date) {
-        byDate[d.date] = d;
-      }
-    }
-
-    // 取最新日期
-    const dates = Object.keys(byDate).sort();
-    const latestDate = dates[dates.length - 1];
-    const latestItems = data.filter(d => d.date === latestDate);
-
     // 按 M2、M1、M0 排序
     const orderMap = { 'M2': 0, 'M1': 1, 'M0': 2 };
-    latestItems.sort((a, b) => {
+    const sorted = [...data].sort((a, b) => {
       const aKey = Object.keys(orderMap).find(k => a.indicator.includes(k)) || '';
       const bKey = Object.keys(orderMap).find(k => b.indicator.includes(k)) || '';
       return (orderMap[aKey] ?? 99) - (orderMap[bKey] ?? 99);
     });
 
+    const latestDate = sorted[0]?.date || '';
+
     let html = `<div class="overview-card" style="border-left-color: var(--primary-dark);">
       <div class="indicator-name">${latestDate}</div>
-      <div class="value" style="font-size:1.1rem;">${latestItems.length} 项</div>
+      <div class="value" style="font-size:1.1rem;">${sorted.length} 项</div>
       <div class="meta">货币供应量期末值</div>
     </div>`;
 
-    for (const item of latestItems) {
+    for (const item of sorted) {
       const val = item.value !== null && item.value !== undefined
         ? Number(item.value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         : 'N/A';
@@ -777,9 +729,10 @@ function getCurrentMsPeriod() {
 }
 
 function initMsDefaultPeriod() {
+  const endYM = getLatestMsMonth();
   if (msPeriodStart) msPeriodStart.value = '200001';
-  if (msPeriodEnd) msPeriodEnd.value = getLatestMsMonth();
-  msState.selectedPeriod = `${msPeriodStart ? msPeriodStart.value : '200001'}-${msPeriodEnd ? msPeriodEnd.value : '202606'}`;
+  if (msPeriodEnd) msPeriodEnd.value = endYM;
+  msState.selectedPeriod = `200001-${endYM}`;
 }
 
 function getLatestMsMonth() {
@@ -1242,8 +1195,8 @@ function bindEvents() {
       const months = parseInt(btn.dataset.months, 10);
       const isAll = btn.dataset.all === '1';
       if (isAll) {
-        // 全部数据
-        if (periodStart) periodStart.value = '200001';
+        // 全部数据（CPI 最早数据从 2021 年开始）
+        if (periodStart) periodStart.value = '202101';
         if (periodEnd) periodEnd.value = getLatestMonth();
       } else if (!isNaN(months)) {
         const endYM = getLatestMonth();
@@ -1667,7 +1620,7 @@ function getLatestPpiMonth() {
     }
   }
   const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth()).padStart(2, '0')}`;
+  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
 /**
@@ -1861,10 +1814,10 @@ function getLatestMonth() {
       return dates[dates.length - 1].replace('-', '');
     }
   }
-  // 兜底：当前月份 - 1 个月
+  // 兜底：当前月份
   const now = new Date();
   const y = now.getFullYear();
-  const m = now.getMonth(); // 0-indexed
+  const m = now.getMonth() + 1;
   return `${y}${String(m).padStart(2, '0')}`;
 }
 
